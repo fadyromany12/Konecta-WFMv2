@@ -8,7 +8,6 @@
     "api/index.ts": {
       "memory": 1024,
       "maxDuration": 30,
-      "//": "better-sqlite3 finds its native binary through a runtime lookup that static tracing cannot follow, so the binary is included explicitly.",
       "includeFiles": "node_modules/better-sqlite3/build/Release/*.node"
     }
   },
