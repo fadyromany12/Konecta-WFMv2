@@ -1,7 +1,34 @@
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { SCHEMA } from './schema.js';
+
+/**
+ * better-sqlite3 normally finds its compiled addon through `bindings`, which
+ * searches at runtime relative to the calling module. A bundler moves the
+ * calling module, so that search can fail in a serverless bundle even when the
+ * binary was shipped. We try the normal path first and only fall back to
+ * naming the binary outright, which keeps local development untouched.
+ */
+function openDatabase(file: string): Database.Database {
+  try {
+    return new Database(file);
+  } catch (err) {
+    const binding = findNativeBinding();
+    if (!binding) throw err;
+    console.log(`better-sqlite3: using explicitly located native binding at ${binding}`);
+    return new Database(file, { nativeBinding: binding });
+  }
+}
+
+function findNativeBinding(): string | null {
+  const relative = join('node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+  const candidates = [
+    join(process.cwd(), relative),
+    join('/var/task', relative), // the serverless bundle root
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
 
 /**
  * Database location.
@@ -22,7 +49,7 @@ export const IS_MEMORY = configured === ':memory:';
 
 if (!IS_MEMORY) mkdirSync(dirname(configured), { recursive: true });
 
-export const db = new Database(configured);
+export const db = openDatabase(configured);
 
 // WAL is a file-mode concern; an in-memory database neither needs nor accepts it.
 if (!IS_MEMORY) db.pragma('journal_mode = WAL');

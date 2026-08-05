@@ -1,12 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run vercel-build",
+  "//": "buildCommand runs inside web/ on purpose. A script named vercel-build in a workspace root gets run against every workspace, and the server workspace has no such script.",
+  "buildCommand": "cd web && npm run build",
+  "installCommand": "npm install",
   "outputDirectory": "web/dist",
   "framework": null,
   "functions": {
     "api/index.ts": {
       "memory": 1024,
-      "maxDuration": 30
+      "maxDuration": 30,
+      "//": "better-sqlite3 finds its native binary through a runtime lookup that static tracing cannot follow, so the binary is included explicitly.",
+      "includeFiles": "node_modules/better-sqlite3/build/Release/*.node"
     }
   },
   "rewrites": [
