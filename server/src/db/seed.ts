@@ -1,0 +1,531 @@
+/**
+ * Seed a working demonstration dataset.
+ *
+ * The data is deliberately not tidy. It contains the situations a supervisor
+ * actually has to deal with — a late clock-on, a break taken an hour early,
+ * training nobody scheduled, a meal that overran, a shift with no clock-off,
+ * and a no call no show — because a workforce tool that only ever shows clean
+ * days teaches you nothing about using it.
+ *
+ * Run with: npm run seed  (add --force to rebuild an existing database)
+ */
+
+import bcrypt from 'bcryptjs';
+import { db, transact } from './index.js';
+import { ACTIVITIES } from '../domain/reference.js';
+import type { ScheduleActivityKey } from '../domain/reference.js';
+import type { ScheduleShift } from '../domain/schedule.js';
+import { addDays, nowStamp, stamp, todayStr, type DateStr } from '../domain/time.js';
+import { saveShifts } from '../services/scheduling.js';
+import { generateTimecard, runPayroll } from '../services/timecards.js';
+
+const FORCE = process.argv.includes('--force');
+const PASSWORD = 'pulse123';
+
+interface SeedRow {
+  time: string;
+  activityKey: ScheduleActivityKey;
+}
+
+const NIGHT_SHIFT: SeedRow[] = [
+  { time: '23:00', activityKey: 'SHIFT_START' },
+  { time: '01:00', activityKey: 'BREAK' },
+  { time: '01:15', activityKey: 'OPEN_TIME' },
+  { time: '03:00', activityKey: 'LUNCH' },
+  { time: '03:30', activityKey: 'OPEN_TIME' },
+  { time: '06:15', activityKey: 'BREAK' },
+  { time: '06:30', activityKey: 'OPEN_TIME' },
+];
+const NIGHT_END = '07:30';
+
+const DAY_SHIFT: SeedRow[] = [
+  { time: '09:00', activityKey: 'SHIFT_START' },
+  { time: '11:00', activityKey: 'BREAK' },
+  { time: '11:15', activityKey: 'OPEN_TIME' },
+  { time: '13:00', activityKey: 'LUNCH' },
+  { time: '13:30', activityKey: 'OPEN_TIME' },
+  { time: '15:30', activityKey: 'BREAK' },
+  { time: '15:45', activityKey: 'OPEN_TIME' },
+];
+const DAY_END = '17:30';
+
+function main() {
+  const existing = db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number };
+  if (existing.n > 0 && !FORCE) {
+    console.log(`Database already has ${existing.n} users. Re-run with --force to rebuild.`);
+    return;
+  }
+
+  if (FORCE) {
+    transact(() => {
+      for (const table of [
+        'audit_log',
+        'messages',
+        'time_off_requests',
+        'accruals',
+        'alternates',
+        'group_members',
+        'groups',
+        'timecard_rows',
+        'timecards',
+        'punches',
+        'schedule_rows',
+        'schedules',
+        'shift_rule_changes',
+        'project_activities',
+        'project_departments',
+        'payroll_periods',
+        'users',
+        'projects',
+      ]) {
+        db.prepare(`DELETE FROM ${table}`).run();
+      }
+      db.prepare("DELETE FROM sqlite_sequence WHERE name NOT IN ('')").run();
+    });
+  }
+
+  const today = todayStr();
+  const hash = bcrypt.hashSync(PASSWORD, 10);
+
+  // ---------------------------------------------------------------- projects
+  const projects = [
+    { id: 'A123', name: 'Konecta Care', fn: '111222333', site: 'Cairo', region: 'EMEA' },
+    { id: 'A456', name: 'Konecta Care', fn: '111222333', site: 'Lisbon', region: 'EMEA' },
+    { id: 'B900', name: 'Retail Support', fn: '444555666', site: 'Cairo', region: 'EMEA' },
+  ];
+  const insertProject = db.prepare(
+    'INSERT INTO projects (activity_id, name, financial_number, site, region) VALUES (?, ?, ?, ?, ?)',
+  );
+  const insertDept = db.prepare('INSERT INTO project_departments (activity_id, department_code) VALUES (?, ?)');
+  const insertProjAct = db.prepare('INSERT INTO project_activities (activity_id, activity_code) VALUES (?, ?)');
+
+  transact(() => {
+    for (const p of projects) {
+      insertProject.run(p.id, p.name, p.fn, p.site, p.region);
+      for (const dept of ['10000', '10002', '10007']) insertDept.run(p.id, dept);
+      for (const activity of ACTIVITIES) insertProjAct.run(p.id, activity.code);
+    }
+  });
+
+  // ------------------------------------------------------------------- users
+  const insertUser = db.prepare(
+    `INSERT INTO users (employee_id, name, email, password_hash, role, manager_id, project_id, department_code, status, shift_rule, region, hire_date)
+     VALUES (@employee_id, @name, @email, @password_hash, @role, @manager_id, @project_id, @department_code, @status, @shift_rule, @region, @hire_date)`,
+  );
+
+  function addUser(u: {
+    employee_id: string;
+    name: string;
+    email: string;
+    role: string;
+    manager_id: number | null;
+    project_id: string | null;
+    shift_rule?: string;
+    department_code?: string;
+    status?: string;
+    hire_date?: string;
+  }): number {
+    const info = insertUser.run({
+      employee_id: u.employee_id,
+      name: u.name,
+      email: u.email,
+      password_hash: hash,
+      role: u.role,
+      manager_id: u.manager_id,
+      project_id: u.project_id,
+      department_code: u.department_code ?? '10000',
+      status: u.status ?? 'ACTIVE',
+      shift_rule: u.shift_rule ?? 'CR1',
+      region: 'EMEA',
+      hire_date: u.hire_date ?? addDays(today, -400),
+    });
+    return Number(info.lastInsertRowid);
+  }
+
+  const adminId = addUser({
+    employee_id: 'PLS0000001',
+    name: 'Systems Administrator',
+    email: 'admin@konecta.example',
+    role: 'ADMIN',
+    manager_id: null,
+    project_id: null,
+  });
+
+  const omId = addUser({
+    employee_id: 'OM0000010',
+    name: 'Nadia Farouk',
+    email: 'nadia.farouk@konecta.example',
+    role: 'OPS_MANAGER',
+    manager_id: adminId,
+    project_id: 'A123',
+  });
+
+  const tlNightId = addUser({
+    employee_id: 'TL0000101',
+    name: 'Youssef Adel',
+    email: 'youssef.adel@konecta.example',
+    role: 'TEAM_LEADER',
+    manager_id: omId,
+    project_id: 'A123',
+  });
+
+  const tlDayId = addUser({
+    employee_id: 'TL0000102',
+    name: 'Mariam Saleh',
+    email: 'mariam.saleh@konecta.example',
+    role: 'TEAM_LEADER',
+    manager_id: omId,
+    project_id: 'A123',
+    shift_rule: 'CR2',
+  });
+
+  const trainerId = addUser({
+    employee_id: 'TR0000201',
+    name: 'Omar Hassan',
+    email: 'omar.hassan@konecta.example',
+    role: 'TRAINER',
+    manager_id: omId,
+    project_id: 'A123',
+  });
+
+  const nightAdvisors = [
+    'Layla Mahmoud',
+    'Karim Fouad',
+    'Sara Nabil',
+    'Hassan Tarek',
+    'Dina Ashraf',
+    'Amir Zaki',
+  ].map((name, i) =>
+    addUser({
+      employee_id: `AD000${1101 + i}`,
+      name,
+      email: emailFor(name),
+      role: 'ADVISOR',
+      manager_id: tlNightId,
+      project_id: 'A123',
+      shift_rule: i === 5 ? 'CR3' : 'CR1',
+    }),
+  );
+
+  const dayAdvisors = ['Yara Samir', 'Mostafa Gamal', 'Nour Ibrahim', 'Rami Adel'].map((name, i) =>
+    addUser({
+      employee_id: `AD000${1201 + i}`,
+      name,
+      email: emailFor(name),
+      role: 'ADVISOR',
+      manager_id: tlDayId,
+      project_id: 'A123',
+      shift_rule: 'CR2',
+    }),
+  );
+
+  const newHires = ['Salma Reda', 'Tamer Wael'].map((name, i) =>
+    addUser({
+      employee_id: `AD000${1301 + i}`,
+      name,
+      email: emailFor(name),
+      role: 'ADVISOR',
+      manager_id: trainerId,
+      project_id: 'A123',
+      hire_date: addDays(today, -9),
+    }),
+  );
+
+  // The advisor whose week the training scenarios are built around.
+  const focusId = nightAdvisors[0];
+
+  // -------------------------------------------------------- shift rule change
+  db.prepare(
+    'INSERT INTO shift_rule_changes (user_id, shift_rule, effective_date, created_by) VALUES (?, ?, ?, ?)',
+  ).run(nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId);
+
+  // ------------------------------------------------------- schedules & punches
+  const insertPunch = db.prepare('INSERT INTO punches (user_id, at, type, activity, source) VALUES (?, ?, ?, ?, ?)');
+
+  const FROM = -14;
+  const TO = 7;
+
+  for (let offset = FROM; offset <= TO; offset++) {
+    const date = addDays(today, offset);
+    const dow = new Date(date + 'T00:00:00Z').getUTCDay();
+    const weekend = dow === 5 || dow === 6; // Friday & Saturday weekend
+
+    for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
+      const night = nightAdvisors.includes(userId);
+      const isNewHire = newHires.includes(userId);
+      if (weekend && !isNewHire) continue;
+      if (isNewHire && offset < -9) continue;
+
+      const template = night ? NIGHT_SHIFT : DAY_SHIFT;
+      const endTime = night ? NIGHT_END : DAY_END;
+
+      const rows = template.map((r) => ({
+        startAt: stamp(date, r.time),
+        activityKey: r.activityKey,
+      }));
+
+      // New hires are in class rather than on the phones for their first week.
+      const shiftRows = isNewHire
+        ? [
+            { startAt: stamp(date, '09:00'), activityKey: 'SHIFT_START' as ScheduleActivityKey },
+            { startAt: stamp(date, '09:05'), activityKey: 'TRAINING' as ScheduleActivityKey },
+            { startAt: stamp(date, '13:00'), activityKey: 'LUNCH' as ScheduleActivityKey },
+            { startAt: stamp(date, '13:30'), activityKey: 'TRAINING' as ScheduleActivityKey },
+          ]
+        : rows;
+
+      const shift: ScheduleShift = {
+        shiftNo: 1,
+        rows: shiftRows,
+        endAt: stamp(date, isNewHire ? '17:00' : endTime),
+      };
+
+      saveShifts({ userId, date, shifts: [shift], actorId: adminId, source: 'IEX' });
+
+      if (offset > 0) continue; // nothing has been punched in the future
+
+      // Today's punches are emitted only up to the current moment, so a shift
+      // that is part way through looks part way through rather than abandoned.
+      seedPunches({
+        insertPunch,
+        userId,
+        date,
+        night,
+        isNewHire,
+        isFocus: userId === focusId,
+        offset,
+        notAfter: offset === 0 ? nowStamp() : null,
+      });
+    }
+  }
+
+  // ---------------------------------------------- generate the resulting cards
+  for (let offset = FROM; offset <= 0; offset++) {
+    const date = addDays(today, offset);
+    for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
+      generateTimecard({ userId, date, actorId: adminId, now: nowStamp() });
+    }
+  }
+
+  // Approve everything older than five days so the summary is not a wall of red.
+  db.prepare(
+    `UPDATE timecards SET approved = 1, approved_by = ?, approved_at = datetime('now')
+     WHERE payroll_date < ? AND in_progress = 0`,
+  ).run(tlNightId, addDays(today, -5));
+
+  // ------------------------------------------------------------ payroll period
+  const periodStart = addDays(today, -28);
+  const periodEnd = addDays(today, -14);
+  db.prepare(
+    'INSERT INTO payroll_periods (region, start_date, end_date, cutoff_at) VALUES (?, ?, ?, ?)',
+  ).run('EMEA', periodStart, periodEnd, `${addDays(periodEnd, 1)} 23:59`);
+  db.prepare(
+    'INSERT INTO payroll_periods (region, start_date, end_date, cutoff_at) VALUES (?, ?, ?, ?)',
+  ).run('EMEA', addDays(today, -13), addDays(today, 1), `${addDays(today, 2)} 23:59`);
+
+  runPayroll({ region: 'EMEA', start: periodStart, end: periodEnd, actorId: adminId });
+
+  // ------------------------------------------------------------------ accruals
+  const insertAccrual = db.prepare(
+    'INSERT INTO accruals (user_id, accrual_type, balance_hours, as_of) VALUES (?, ?, ?, ?)',
+  );
+  for (const [i, userId] of [...nightAdvisors, ...dayAdvisors, ...newHires].entries()) {
+    insertAccrual.run(userId, 'VACATION', 40 + i * 3.5, today);
+    insertAccrual.run(userId, 'SICK', 16 + (i % 4) * 4, today);
+  }
+
+  db.prepare(
+    `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(nightAdvisors[2], 'VACATION', addDays(today, 21), addDays(today, 23), 24, 'PENDING', 'Family event');
+  db.prepare(
+    `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason, decided_by, decided_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+  ).run(dayAdvisors[0], 'VACATION', addDays(today, 30), addDays(today, 31), 16, 'APPROVED', 'Annual leave', tlDayId);
+
+  // -------------------------------------------------------- groups & delegation
+  const groupInfo = db
+    .prepare('INSERT INTO groups (name, type, owner_id) VALUES (?, ?, ?)')
+    .run('Night Coverage', 'CUSTOM', tlNightId);
+  const groupId = Number(groupInfo.lastInsertRowid);
+  for (const userId of nightAdvisors.slice(0, 3)) {
+    db.prepare('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)').run(groupId, userId);
+  }
+
+  db.prepare('INSERT INTO alternates (user_id, alternate_user_id) VALUES (?, ?)').run(tlDayId, tlNightId);
+
+  // ------------------------------------------------------------------ messages
+  const insertMessage = db.prepare(
+    'INSERT INTO messages (user_id, subject, body, severity) VALUES (?, ?, ?, ?)',
+  );
+  insertMessage.run(
+    tlNightId,
+    'Timecards awaiting approval',
+    'You have unapproved timecards inside your three day edit window. Review and approve them before the payroll cut-off.',
+    'WARN',
+  );
+  insertMessage.run(
+    tlNightId,
+    'Exception review',
+    'Layla Mahmoud has a Long Lunch and a Late on her card. Confirm the reason before approving.',
+    'WARN',
+  );
+  insertMessage.run(
+    focusId,
+    'Welcome to Konecta Pulse',
+    'Clock on from the Web Clock when your shift starts. You can only clock on inside your scheduled window.',
+    'INFO',
+  );
+  insertMessage.run(
+    omId,
+    'Payroll period closed',
+    `Payroll has run for ${periodStart} to ${periodEnd}. Edits to that period are now post-payroll corrections.`,
+    'INFO',
+  );
+
+  const counts = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM users) AS users,
+              (SELECT COUNT(*) FROM schedules) AS schedules,
+              (SELECT COUNT(*) FROM punches) AS punches,
+              (SELECT COUNT(*) FROM timecards) AS timecards,
+              (SELECT COUNT(*) FROM timecard_rows) AS rows`,
+    )
+    .get();
+
+  console.log('Konecta Pulse seeded:', counts);
+  console.log(`\nSign in with any of these — password for every account is "${PASSWORD}":`);
+  console.log('  admin@konecta.example          System Administrator');
+  console.log('  nadia.farouk@konecta.example   Operations Manager  (44 day edit window)');
+  console.log('  youssef.adel@konecta.example   Team Leader, nights (3 day edit window)');
+  console.log('  mariam.saleh@konecta.example   Team Leader, days');
+  console.log('  omar.hassan@konecta.example    Trainer             (6 day edit window)');
+  console.log('  layla.mahmoud@konecta.example  Advisor with the interesting week');
+}
+
+function emailFor(name: string): string {
+  return `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@konecta.example`;
+}
+
+/**
+ * Punch a day for one advisor. Most days are unremarkable; the focus advisor
+ * gets a scripted week of problems so every exception path has real data behind
+ * it on first launch.
+ */
+function seedPunches(params: {
+  insertPunch: any;
+  userId: number;
+  date: DateStr;
+  night: boolean;
+  isNewHire: boolean;
+  isFocus: boolean;
+  offset: number;
+  /** When set, punches later than this instant are not emitted. */
+  notAfter: string | null;
+}) {
+  const { insertPunch, userId, date, night, isNewHire, isFocus, offset, notAfter } = params;
+
+  const punch = (day: DateStr, time: string, type: string, activity: string | null) => {
+    const at = stamp(day, time);
+    if (notAfter && at > notAfter) return;
+    insertPunch.run(userId, at, type, activity, 'WEB_CLOCK');
+  };
+
+  const next = addDays(date, 1);
+
+  if (isNewHire) {
+    punch(date, '08:58', 'ON', '15-001');
+    punch(date, '13:02', 'CHANGE', '99-001');
+    punch(date, '13:31', 'CHANGE', '15-001');
+    punch(date, '17:00', 'OFF', null);
+    return;
+  }
+
+  // The focus advisor's scripted week.
+  if (isFocus && offset === -2) {
+    // Late on, break taken an hour early, unscheduled CE training, a two minute
+    // stray coaching punch, a meal that overran, and an early departure.
+    punch(date, '23:05', 'ON', '01-001');
+    punch(date, '23:06', 'CHANGE', '05-001');
+    punch(date, '23:22', 'CHANGE', '01-001');
+    punch(next, '01:00', 'CHANGE', '26-001');
+    punch(next, '01:15', 'CHANGE', '01-001');
+    punch(next, '02:30', 'CHANGE', '15-002');
+    punch(next, '02:57', 'CHANGE', '01-001');
+    punch(next, '03:00', 'CHANGE', '99-001');
+    punch(next, '03:40', 'CHANGE', '16-001');
+    punch(next, '03:42', 'CHANGE', '01-001');
+    punch(next, '05:00', 'CHANGE', '26-001');
+    punch(next, '05:15', 'CHANGE', '01-001');
+    punch(next, '07:22', 'OFF', null);
+    return;
+  }
+
+  if (isFocus && offset === -3) {
+    // Forgot to clock off: the card is completed with an assumed off.
+    punch(date, '22:58', 'ON', '01-001');
+    punch(next, '01:01', 'CHANGE', '26-001');
+    punch(next, '01:16', 'CHANGE', '01-001');
+    punch(next, '03:00', 'CHANGE', '99-001');
+    punch(next, '03:29', 'CHANGE', '01-001');
+    return;
+  }
+
+  if (isFocus && offset === -6) {
+    return; // no call no show
+  }
+
+  if (isFocus && offset === -4) {
+    // Extra hours picked up at the end of the shift.
+    punch(date, '22:59', 'ON', '01-001');
+    punch(next, '01:00', 'CHANGE', '26-001');
+    punch(next, '01:15', 'CHANGE', '01-001');
+    punch(next, '03:00', 'CHANGE', '99-001');
+    punch(next, '03:30', 'CHANGE', '01-001');
+    punch(next, '06:15', 'CHANGE', '26-001');
+    punch(next, '06:30', 'CHANGE', '01-001');
+    punch(next, '07:30', 'CHANGE', '07-001');
+    punch(next, '09:30', 'OFF', null);
+    return;
+  }
+
+  // Everyone else works to plan. Most people come back from breaks on time, so
+  // the exceptions that do appear are worth a supervisor's attention rather
+  // than being background noise on every card.
+  const seed = userId * 7 + Math.abs(offset) * 13;
+  const startDrift = (seed % 5) - 2; // -2..+2 minutes around the scheduled start
+  const overrun = seed % 9 === 0 ? 6 : 0; // an occasional genuine overrun
+  const earlyOff = seed % 11 === 0 ? -6 : 0; // an occasional early departure
+
+  const shiftStart = night ? '23:00' : '09:00';
+  const start = shiftTime(shiftStart, startDrift);
+
+  if (night) {
+    punch(date, start, 'ON', '01-001');
+    punch(next, '01:00', 'CHANGE', '26-001');
+    punch(next, '01:15', 'CHANGE', '01-001');
+    punch(next, '03:00', 'CHANGE', '99-001');
+    punch(next, shiftTime('03:30', overrun), 'CHANGE', '01-001');
+    punch(next, '06:15', 'CHANGE', '26-001');
+    punch(next, '06:30', 'CHANGE', '01-001');
+    punch(next, shiftTime('07:30', earlyOff), 'OFF', null);
+  } else {
+    punch(date, start, 'ON', '01-001');
+    punch(date, '11:00', 'CHANGE', '26-001');
+    punch(date, '11:15', 'CHANGE', '01-001');
+    punch(date, '13:00', 'CHANGE', '99-001');
+    punch(date, shiftTime('13:30', overrun), 'CHANGE', '01-001');
+    punch(date, '15:30', 'CHANGE', '26-001');
+    punch(date, '15:45', 'CHANGE', '01-001');
+    punch(date, shiftTime('17:30', earlyOff), 'OFF', null);
+  }
+}
+
+function shiftTime(time: string, deltaMinutes: number): string {
+  const [h, m] = time.split(':').map(Number);
+  let total = h * 60 + m + deltaMinutes;
+  total = ((total % 1440) + 1440) % 1440;
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+main();

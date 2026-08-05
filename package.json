@@ -1,0 +1,26 @@
+{
+  "name": "konecta-pulse",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Konecta Pulse — Planning, Utilization, Labor, Scheduling & Exceptions. Workforce management for contact centre operations.",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace server run build && npm --workspace web run build",
+    "seed": "npm --workspace server run seed",
+    "test": "npm --workspace server run test",
+    "typecheck": "npm --workspace server run typecheck && npm --workspace web run typecheck",
+    "start": "npm --workspace server run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
