@@ -6,6 +6,16 @@ import { SUPERVISOR_ROLES, type Role } from '../domain/reference.js';
 const SECRET = process.env.PULSE_SECRET ?? 'konecta-pulse-development-secret';
 const TOKEN_TTL = '12h';
 
+// The fallback keeps local development frictionless, but anyone who can read
+// the source can mint a token with it. Say so loudly anywhere that is not a
+// developer's own machine.
+if (!process.env.PULSE_SECRET && (process.env.VERCEL || process.env.NODE_ENV === 'production')) {
+  console.warn(
+    'WARNING: PULSE_SECRET is not set, so session tokens are signed with the public development secret. ' +
+      'Set PULSE_SECRET before this deployment holds anything that matters.',
+  );
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {

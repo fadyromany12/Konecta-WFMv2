@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './state';
 import { Login } from './pages/Login';
 import { Home } from './pages/Home';
@@ -23,6 +23,7 @@ const TABS = [
 
 export function App() {
   const { user, catalog, loading, signOut } = useSession();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -66,7 +67,9 @@ export function App() {
         ))}
       </nav>
 
-      <main>
+      {/* Keying on the tab restarts the entrance animation on navigation, so a
+          new screen arrives rather than swapping in place. */}
+      <main key={location.pathname.split('/')[1]}>
         <Routes>
           <Route path="/" element={<Navigate to="/home" replace />} />
           <Route path="/home" element={<Home />} />

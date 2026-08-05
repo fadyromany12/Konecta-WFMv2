@@ -12,9 +12,10 @@
     "dev:server": "npm --workspace server run dev",
     "dev:web": "npm --workspace web run dev",
     "build": "npm --workspace server run build && npm --workspace web run build",
+    "vercel-build": "npm --workspace web run build",
     "seed": "npm --workspace server run seed",
     "test": "npm --workspace server run test",
-    "typecheck": "npm --workspace server run typecheck && npm --workspace web run typecheck",
+    "typecheck": "npm --workspace server run typecheck && npm --workspace web run typecheck && tsc -p tsconfig.json",
     "start": "npm --workspace server run start"
   },
   "devDependencies": {

@@ -43,6 +43,40 @@ npm run build     # production build; the server then serves web/dist itself
 npm run seed -- --force   # rebuild the database from scratch
 ```
 
+## Deploying to Vercel
+
+The repository is Vercel-ready. `api/index.ts` exports the Express app as a
+serverless function, `vercel.json` routes `/api/*` to it and everything else to
+the built SPA.
+
+Either connect the repository at [vercel.com/new](https://vercel.com/new) and let
+it deploy on push, or from a checkout:
+
+```bash
+npm i -g vercel
+vercel --prod
+```
+
+No settings need changing — the build command, output directory and routes all
+come from `vercel.json`.
+
+**How data works there.** A serverless filesystem is read-only apart from `/tmp`,
+and `/tmp` is neither shared between instances nor durable. So on Vercel the
+database defaults to `:memory:` and each cold start seeds itself in about a
+quarter of a second. That makes the deployment reproducible and free of external
+dependencies, at the cost of edits living only as long as a warm instance —
+right for a testing environment, not for real data. Point `PULSE_DB` at a file
+for single-process hosting, or move to Postgres for anything durable.
+
+**Set `PULSE_SECRET`.** Without it, session tokens are signed with the public
+development fallback and the app warns on boot:
+
+```bash
+vercel env add PULSE_SECRET production
+```
+
+Demonstration accounts share one password, so treat any deployment as public.
+
 ## How it is put together
 
 ```

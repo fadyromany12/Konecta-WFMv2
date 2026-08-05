@@ -5,8 +5,27 @@ import { App } from './App';
 import { SessionProvider } from './state';
 import './styles.css';
 
+/**
+ * The aurora and grain sit behind everything, outside the router, so they are
+ * never torn down and re-created on navigation — the drift stays continuous as
+ * you move around the app.
+ */
+function Backdrop() {
+  return (
+    <>
+      <div className="aurora" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="grain" aria-hidden="true" />
+    </>
+  );
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <Backdrop />
     <BrowserRouter>
       <SessionProvider>
         <App />

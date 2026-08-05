@@ -19,8 +19,8 @@ import { addDays, nowStamp, stamp, todayStr, type DateStr } from '../domain/time
 import { saveShifts } from '../services/scheduling.js';
 import { generateTimecard, runPayroll } from '../services/timecards.js';
 
-const FORCE = process.argv.includes('--force');
-const PASSWORD = 'pulse123';
+export const DEMO_PASSWORD = 'pulse123';
+const PASSWORD = DEMO_PASSWORD;
 
 interface SeedRow {
   time: string;
@@ -49,14 +49,25 @@ const DAY_SHIFT: SeedRow[] = [
 ];
 const DAY_END = '17:30';
 
-function main() {
+/**
+ * Build the demonstration dataset. Safe to call at any time: it does nothing if
+ * the database already has users unless `force` is set. Exported so a
+ * serverless cold start can seed its own ephemeral database, which is how the
+ * hosted testing deployment gets its data.
+ */
+export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seeded: boolean } {
+  const { force = false, quiet = false } = options;
+  const say = (...args: unknown[]) => {
+    if (!quiet) console.log(...args);
+  };
+
   const existing = db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number };
-  if (existing.n > 0 && !FORCE) {
-    console.log(`Database already has ${existing.n} users. Re-run with --force to rebuild.`);
-    return;
+  if (existing.n > 0 && !force) {
+    say(`Database already has ${existing.n} users. Re-run with --force to rebuild.`);
+    return { seeded: false };
   }
 
-  if (FORCE) {
+  if (force) {
     transact(() => {
       for (const table of [
         'audit_log',
@@ -393,14 +404,16 @@ function main() {
     )
     .get();
 
-  console.log('Konecta Pulse seeded:', counts);
-  console.log(`\nSign in with any of these — password for every account is "${PASSWORD}":`);
-  console.log('  admin@konecta.example          System Administrator');
-  console.log('  nadia.farouk@konecta.example   Operations Manager  (44 day edit window)');
-  console.log('  youssef.adel@konecta.example   Team Leader, nights (3 day edit window)');
-  console.log('  mariam.saleh@konecta.example   Team Leader, days');
-  console.log('  omar.hassan@konecta.example    Trainer             (6 day edit window)');
-  console.log('  layla.mahmoud@konecta.example  Advisor with the interesting week');
+  say('Konecta Pulse seeded:', counts);
+  say(`\nSign in with any of these — password for every account is "${PASSWORD}":`);
+  say('  admin@konecta.example          System Administrator');
+  say('  nadia.farouk@konecta.example   Operations Manager  (44 day edit window)');
+  say('  youssef.adel@konecta.example   Team Leader, nights (3 day edit window)');
+  say('  mariam.saleh@konecta.example   Team Leader, days');
+  say('  omar.hassan@konecta.example    Trainer             (6 day edit window)');
+  say('  layla.mahmoud@konecta.example  Advisor with the interesting week');
+
+  return { seeded: true };
 }
 
 function emailFor(name: string): string {
@@ -528,4 +541,7 @@ function shiftTime(time: string, deltaMinutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
-main();
+// Run directly (`npm run seed`) rather than when imported by the server.
+if (process.argv[1] && /seed\.(ts|js)$/.test(process.argv[1])) {
+  seed({ force: process.argv.includes('--force') });
+}
