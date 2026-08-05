@@ -1,6 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "//": "buildCommand runs inside web/ on purpose. A script named vercel-build in a workspace root gets run against every workspace, and the server workspace has no such script.",
   "buildCommand": "cd web && npm run build",
   "installCommand": "npm install",
   "outputDirectory": "web/dist",
