@@ -23,6 +23,15 @@ echo "  output base     : $OUT_BASE"
 [ "$REPO" != "$OUT_BASE" ] && echo "  note: Vercel's Root Directory is not the repository root; staging output there anyway."
 
 # ---------------------------------------------------------------- front end
+# npm only treats a directory as a workspace root when it is run from that
+# root. If the install phase ran inside a subdirectory it installed that
+# workspace alone, and the front end's dependencies are missing. Rather than
+# depend on where install happened, check and put it right.
+if [ ! -d "$REPO/node_modules/react" ] && [ ! -d "$REPO/web/node_modules/react" ]; then
+  echo "==> Front end dependencies are missing; installing from the repository root"
+  ( cd "$REPO" && npm install )
+fi
+
 echo "==> Building the front end"
 ( cd "$REPO/web" && npm run build )
 

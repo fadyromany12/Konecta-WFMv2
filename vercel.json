@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "b=$PWD; d=$PWD; while [ ! -d \"$d/web\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; cd \"$d\" && bash scripts/vercel-build.sh \"$b\"",
-  "installCommand": "npm install",
+  "installCommand": "d=$PWD; while [ ! -d \"$d/web\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; cd \"$d\" && npm install",
   "framework": null
 }
