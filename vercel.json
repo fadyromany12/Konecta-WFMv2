@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "if [ ! -d web ]; then echo ''; echo '>>> Konecta Pulse cannot build from here.'; echo '>>> The Vercel Root Directory is set to a subdirectory, so web/ and api/ are not visible.'; echo '>>> Fix: Project Settings > Build and Deployment > Root Directory — clear it so it points at the repository root, then redeploy.'; echo ''; exit 1; fi; cd web && npm run build",
+  "buildCommand": "bash scripts/vercel-build.sh",
   "installCommand": "npm install && cd web && npm install",
   "outputDirectory": "web/dist",
   "framework": null,
