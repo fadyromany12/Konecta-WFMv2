@@ -21,7 +21,7 @@ export function createApp(): Express {
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/health', (_req, res) => {
+  app.get(['/api/health', '/health'], (_req, res) => {
     const users = db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number };
     res.json({
       ok: true,
@@ -33,6 +33,11 @@ export function createApp(): Express {
   });
 
   app.use('/api', api);
+  // A platform rewrite can deliver the request with the /api prefix already
+  // stripped, so the same router is mounted at the root as well. Harmless in a
+  // single-process deployment, and it keeps routing independent of how the
+  // request was rewritten on the way in.
+  app.use(api);
 
   // In a single-process deployment the API also serves the built front end.
   // On Vercel the static files are served by the platform and this is skipped.

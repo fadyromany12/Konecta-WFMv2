@@ -18,7 +18,8 @@
     "start": "npm --workspace server run start"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "esbuild": "^0.24.2"
   },
   "engines": {
     "node": "22.x"

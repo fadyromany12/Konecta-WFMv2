@@ -1,18 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "bash scripts/vercel-build.sh",
+  "buildCommand": "b=$PWD; d=$PWD; while [ ! -d \"$d/web\" ] && [ \"$d\" != / ]; do d=$(dirname \"$d\"); done; cd \"$d\" && bash scripts/vercel-build.sh \"$b\"",
   "installCommand": "npm install",
-  "outputDirectory": "web/dist",
-  "framework": null,
-  "functions": {
-    "api/index.ts": {
-      "memory": 1024,
-      "maxDuration": 30,
-      "includeFiles": "node_modules/better-sqlite3/build/Release/*.node"
-    }
-  },
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ]
+  "framework": null
 }
