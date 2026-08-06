@@ -21,7 +21,6 @@
     "concurrently": "^9.1.2"
   },
   "engines": {
-    "//": "Pinned rather than open-ended: Vercel reads this to pick a Node version, and better-sqlite3 only ships prebuilt binaries for release lines it has caught up with. On a newer Node it falls back to compiling from source at install time.",
     "node": "22.x"
   }
 }
