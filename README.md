@@ -57,8 +57,19 @@ npm i -g vercel
 vercel --prod
 ```
 
-No settings need changing — the build command, output directory and routes all
-come from `vercel.json`.
+**Root Directory must be the repository root.** This is the one setting that
+matters, and it is the one that is easy to get wrong: `web/` (the front end) and
+`api/` (the serverless function) both live at the top level, so pointing Vercel's
+Root Directory at `server/` — which its monorepo detection may offer — hides both
+and the build cannot work. If a build fails with `cd: web: No such file or
+directory`, that is what happened; clear Root Directory under
+**Project Settings → Build and Deployment** and redeploy. The build command
+prints an explicit message in that situation rather than failing cryptically.
+
+Everything else comes from `vercel.json` — build command, output directory,
+function config and routes — so no other settings need changing. Leave the
+dashboard's Build Command and Install Command overrides empty; anything set
+there silently takes precedence over `vercel.json`.
 
 **How data works there.** A serverless filesystem is read-only apart from `/tmp`,
 and `/tmp` is neither shared between instances nor durable. So on Vercel the
