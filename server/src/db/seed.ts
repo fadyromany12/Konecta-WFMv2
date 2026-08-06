@@ -70,6 +70,11 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
   if (force) {
     transact(() => {
       for (const table of [
+        'extra_hours_bids',
+        'extra_hours_offers',
+        'shift_swaps',
+        'forecast_intervals',
+        'forecast_settings',
         'audit_log',
         'messages',
         'time_off_requests',
@@ -254,7 +259,10 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
   const insertPunch = db.prepare('INSERT INTO punches (user_id, at, type, activity, source) VALUES (?, ?, ?, ?, ?)');
 
   const FROM = -14;
-  const TO = 7;
+  // Schedules are published two days ahead; the forecast runs a week out. The
+  // gap between them is deliberate — it is what the planner fills, and what
+  // gives auto-scheduling something to actually do.
+  const TO = 2;
 
   for (let offset = FROM; offset <= TO; offset++) {
     const date = addDays(today, offset);
@@ -392,6 +400,87 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     'Payroll period closed',
     `Payroll has run for ${periodStart} to ${periodEnd}. Edits to that period are now post-payroll corrections.`,
     'INFO',
+  );
+
+  // ------------------------------------------------------- forecast & planning
+  db.prepare(
+    'INSERT INTO forecast_settings (project_id, service_goal, target_seconds, shrinkage) VALUES (?, ?, ?, ?)',
+  ).run('A123', 0.8, 20, 0.3);
+
+  const insertInterval = db.prepare(
+    'INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds) VALUES (?, ?, ?, ?, ?)',
+  );
+
+  // A believable arrival curve: quiet overnight, a morning peak, a dip over
+  // lunch, a second afternoon peak, tailing away through the evening.
+  const CURVE = [
+    0.05, 0.04, 0.03, 0.03, 0.02, 0.02, 0.02, 0.02, 0.03, 0.05, 0.1, 0.2, // 00:00-05:30
+    0.35, 0.5, 0.68, 0.82, 0.92, 1.0, 0.98, 0.94, 0.9, 0.86, 0.8, 0.72, //   06:00-11:30
+    0.62, 0.55, 0.52, 0.55, 0.63, 0.72, 0.82, 0.9, 0.95, 0.93, 0.88, 0.8, //  12:00-17:30
+    0.7, 0.6, 0.5, 0.42, 0.34, 0.28, 0.22, 0.18, 0.14, 0.11, 0.08, 0.06, //   18:00-23:30
+  ];
+
+  transact(() => {
+    for (let offset = -14; offset <= 7; offset++) {
+      const date = addDays(today, offset);
+      const dow = new Date(date + 'T00:00:00Z').getUTCDay();
+      const weekend = dow === 5 || dow === 6;
+      // Weekends run lighter, and each day carries a little natural variation.
+      const dayFactor = (weekend ? 0.45 : 1) * (0.9 + ((Math.abs(offset) * 37) % 21) / 100);
+
+      for (const [i, share] of CURVE.entries()) {
+        const startTime = `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 === 0 ? '00' : '30'}`;
+        // Scaled so the seeded roster roughly covers the curve: a day that is
+        // mostly on plan with a few genuinely short intervals is what a planner
+        // actually spends their time on.
+        const volume = Math.round(share * 11 * dayFactor);
+        const aht = 210 + ((i * 13) % 70); // handling time drifts through the day
+        insertInterval.run('A123', date, startTime, volume, aht);
+      }
+    }
+  });
+
+  // ------------------------------------------------------------ self service
+  const offerInfo = db
+    .prepare(
+      `INSERT INTO extra_hours_offers (project_id, date, start_time, end_time, slots, note, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run('A123', addDays(today, 3), '18:00', '22:00', 3, 'Backlog clearance, evening cover', tlNightId);
+  db.prepare('INSERT INTO extra_hours_bids (offer_id, user_id) VALUES (?, ?)').run(
+    Number(offerInfo.lastInsertRowid),
+    nightAdvisors[2],
+  );
+  db.prepare('INSERT INTO extra_hours_bids (offer_id, user_id) VALUES (?, ?)').run(
+    Number(offerInfo.lastInsertRowid),
+    nightAdvisors[3],
+  );
+  db.prepare(
+    `INSERT INTO extra_hours_offers (project_id, date, start_time, end_time, slots, note, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('A123', addDays(today, 6), '09:00', '13:00', 2, 'Saturday campaign support', tlDayId);
+
+  db.prepare(
+    `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nightAdvisors[1],
+    addDays(today, 2),
+    nightAdvisors[4],
+    addDays(today, 3),
+    'Family commitment',
+    'PENDING_PEER',
+  );
+  db.prepare(
+    `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    dayAdvisors[1],
+    addDays(today, 4),
+    dayAdvisors[2],
+    addDays(today, 5),
+    'Medical appointment',
+    'PENDING_APPROVAL',
   );
 
   const counts = db

@@ -1,10 +1,10 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './state';
 import { Login } from './pages/Login';
-import { Home } from './pages/Home';
+import { Dashboard } from './pages/Dashboard';
 import { TimeAttendance } from './pages/TimeAttendance';
 import { Scheduling } from './pages/Scheduling';
-import { Absence } from './pages/Absence';
+import { MyShifts } from './pages/MyShifts';
 import { Admin } from './pages/Admin';
 import { Reports } from './pages/Reports';
 
@@ -13,10 +13,10 @@ import { Reports } from './pages/Reports';
  * attendance, scheduling, absence, administration and reporting.
  */
 const TABS = [
-  { to: '/home', label: 'Home', supervisorOnly: false },
+  { to: '/dashboard', label: 'Dashboard', supervisorOnly: false },
   { to: '/time', label: 'Time & Attendance', supervisorOnly: false },
   { to: '/scheduling', label: 'Scheduling', supervisorOnly: true },
-  { to: '/absence', label: 'Absence', supervisorOnly: false },
+  { to: '/my', label: 'My Shifts', supervisorOnly: false },
   { to: '/admin', label: 'Admin', supervisorOnly: true },
   { to: '/reports', label: 'Reports', supervisorOnly: false },
 ];
@@ -71,14 +71,16 @@ export function App() {
           new screen arrives rather than swapping in place. */}
       <main key={location.pathname.split('/')[1]}>
         <Routes>
-          <Route path="/" element={<Navigate to="/home" replace />} />
-          <Route path="/home" element={<Home />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/home" element={<Navigate to="/dashboard" replace />} />
           <Route path="/time/*" element={<TimeAttendance />} />
-          <Route path="/scheduling/*" element={user.isSupervisor ? <Scheduling /> : <Navigate to="/home" />} />
-          <Route path="/absence/*" element={<Absence />} />
-          <Route path="/admin/*" element={user.isSupervisor ? <Admin /> : <Navigate to="/home" />} />
+          <Route path="/scheduling/*" element={user.isSupervisor ? <Scheduling /> : <Navigate to="/dashboard" />} />
+          <Route path="/my/*" element={<MyShifts />} />
+          <Route path="/absence/*" element={<Navigate to="/my" replace />} />
+          <Route path="/admin/*" element={user.isSupervisor ? <Admin /> : <Navigate to="/dashboard" />} />
           <Route path="/reports/*" element={<Reports />} />
-          <Route path="*" element={<Navigate to="/home" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
     </div>

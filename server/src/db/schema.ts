@@ -207,6 +207,71 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, read_flag);
 
+-- Forecast volumes per half hour. Required headcount is derived from these by
+-- the Erlang model rather than stored, so changing the service goal or
+-- shrinkage re-plans the day without a rewrite.
+CREATE TABLE IF NOT EXISTS forecast_intervals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id  TEXT NOT NULL REFERENCES projects(activity_id) ON DELETE CASCADE,
+  date        TEXT NOT NULL,
+  start_time  TEXT NOT NULL,
+  volume      REAL NOT NULL DEFAULT 0,
+  aht_seconds INTEGER NOT NULL DEFAULT 240,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (project_id, date, start_time)
+);
+CREATE INDEX IF NOT EXISTS idx_forecast_project_date ON forecast_intervals(project_id, date);
+
+-- Service level promise and planning assumptions, per project.
+CREATE TABLE IF NOT EXISTS forecast_settings (
+  project_id     TEXT PRIMARY KEY REFERENCES projects(activity_id) ON DELETE CASCADE,
+  service_goal   REAL NOT NULL DEFAULT 0.8,
+  target_seconds INTEGER NOT NULL DEFAULT 20,
+  shrinkage      REAL NOT NULL DEFAULT 0.3
+);
+
+-- Advisors trading shifts with each other. Both sides and a supervisor have to
+-- agree, so the record carries the state of each.
+CREATE TABLE IF NOT EXISTS shift_swaps (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  requester_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  requester_date    TEXT NOT NULL,
+  counterparty_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  counterparty_date TEXT NOT NULL,
+  reason            TEXT,
+  -- PENDING_PEER -> PENDING_APPROVAL -> APPROVED | DECLINED
+  status            TEXT NOT NULL DEFAULT 'PENDING_PEER',
+  decided_by        INTEGER REFERENCES users(id),
+  decided_at        TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_swaps_requester ON shift_swaps(requester_id);
+CREATE INDEX IF NOT EXISTS idx_swaps_counterparty ON shift_swaps(counterparty_id);
+
+-- Extra hours offered out to a team, and the advisors putting their hand up.
+CREATE TABLE IF NOT EXISTS extra_hours_offers (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id   TEXT NOT NULL REFERENCES projects(activity_id) ON DELETE CASCADE,
+  date         TEXT NOT NULL,
+  start_time   TEXT NOT NULL,
+  end_time     TEXT NOT NULL,
+  slots        INTEGER NOT NULL DEFAULT 1,
+  note         TEXT,
+  created_by   INTEGER NOT NULL REFERENCES users(id),
+  status       TEXT NOT NULL DEFAULT 'OPEN',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_offers_date ON extra_hours_offers(date);
+
+CREATE TABLE IF NOT EXISTS extra_hours_bids (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  offer_id   INTEGER NOT NULL REFERENCES extra_hours_offers(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status     TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (offer_id, user_id)
+);
+
 -- Payroll periods carry the cut-off after which edits miss the run entirely.
 CREATE TABLE IF NOT EXISTS payroll_periods (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

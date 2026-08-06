@@ -17,18 +17,24 @@ import {
   Toolbar,
 } from '../components/ui';
 import { addDays, durationBetween, today, toMinutes } from '../lib/time';
+import { Analytics } from './Analytics';
 
 export function Reports() {
   const { user } = useSession();
   const items = [{ to: '/reports', label: 'Pulse Report' }];
   if (user?.isSupervisor) {
-    items.push({ to: '/reports/exceptions', label: 'Non-Worked Exceptions' }, { to: '/reports/query', label: 'Query Tool' });
+    items.push(
+      { to: '/reports/analytics', label: 'Analytics' },
+      { to: '/reports/exceptions', label: 'Non-Worked Exceptions' },
+      { to: '/reports/query', label: 'Query Tool' },
+    );
   }
   return (
     <>
       <SubTabs items={items} />
       <Routes>
         <Route index element={<PulseReport />} />
+        <Route path="analytics" element={<Analytics />} />
         <Route path="exceptions" element={<ExceptionReport />} />
         <Route path="query" element={<QueryTool />} />
       </Routes>

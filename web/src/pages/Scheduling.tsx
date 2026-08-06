@@ -17,6 +17,7 @@ import {
   Toolbar,
 } from '../components/ui';
 import { addDays, durationBetween, rollForward, timeOf, today, withTime } from '../lib/time';
+import { Planning } from './Planning';
 
 export function Scheduling() {
   return (
@@ -25,11 +26,13 @@ export function Scheduling() {
         items={[
           { to: '/scheduling', label: 'Edit Advisor Schedule' },
           { to: '/scheduling/group', label: 'Group Schedule Exceptions' },
+          { to: '/scheduling/forecast', label: 'Forecast & Coverage' },
         ]}
       />
       <Routes>
         <Route index element={<EditSchedule />} />
         <Route path="group" element={<GroupExceptions />} />
+        <Route path="forecast" element={<Planning />} />
       </Routes>
     </>
   );
