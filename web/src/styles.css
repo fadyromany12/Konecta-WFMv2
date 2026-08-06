@@ -64,7 +64,7 @@
 
 /* The light theme keeps the same brand hues over Konecta's mist grey. */
 @media (prefers-color-scheme: light) {
-  :root {
+html:not([data-theme]) {
     --glass: rgba(255, 255, 255, 0.72);
     --glass-strong: rgba(255, 255, 255, 0.86);
     --glass-sunken: rgba(255, 255, 255, 0.6);
@@ -88,6 +88,29 @@
     color-scheme: light;
   }
 }
+html[data-theme='light'] {
+    --glass: rgba(255, 255, 255, 0.72);
+    --glass-strong: rgba(255, 255, 255, 0.86);
+    --glass-sunken: rgba(255, 255, 255, 0.6);
+    --hairline: rgba(15, 15, 114, 0.13);
+    --hairline-soft: rgba(15, 15, 114, 0.07);
+    --sheen: rgba(255, 255, 255, 0.9);
+
+    --text: #131538;
+    --text-dim: #565c8c;
+    --text-faint: #8189b3;
+
+    --accent: var(--k-indigo);
+    --accent-strong: var(--k-indigo);
+    --good: #0a8f83;
+    --warn: #9a7b00;
+    --error: #cf2547;
+
+    --shadow-lift: 0 16px 34px -24px rgba(15, 15, 114, 0.5);
+    --shadow-glow: 0 0 0 1px rgba(42, 1, 205, 0.25), 0 10px 30px -14px rgba(42, 1, 205, 0.45);
+
+    color-scheme: light;
+  }
 
 * {
   box-sizing: border-box;
@@ -115,7 +138,7 @@ body {
 }
 
 @media (prefers-color-scheme: light) {
-  body {
+html:not([data-theme]) body {
     background:
       radial-gradient(1100px 700px at 10% -10%, rgba(42, 1, 205, 0.13), transparent 60%),
       radial-gradient(900px 600px at 95% 0%, rgba(0, 200, 255, 0.12), transparent 55%),
@@ -123,6 +146,13 @@ body {
     background-attachment: fixed;
   }
 }
+html[data-theme='light'] body {
+    background:
+      radial-gradient(1100px 700px at 10% -10%, rgba(42, 1, 205, 0.13), transparent 60%),
+      radial-gradient(900px 600px at 95% 0%, rgba(0, 200, 255, 0.12), transparent 55%),
+      var(--k-mist);
+    background-attachment: fixed;
+  }
 
 /* ------------------------------------------------------------- backdrop --
  * Three slow-drifting colour fields plus a fine grain. Fixed and inert, so it
@@ -176,14 +206,21 @@ body {
 }
 
 @media (prefers-color-scheme: light) {
-  .aurora {
+html:not([data-theme]) .aurora {
     opacity: 0.3;
     filter: blur(90px) saturate(120%);
   }
-  .aurora span {
+html:not([data-theme]) .aurora span {
     mix-blend-mode: multiply;
   }
 }
+html[data-theme='light'] .aurora {
+    opacity: 0.3;
+    filter: blur(90px) saturate(120%);
+  }
+html[data-theme='light'] .aurora span {
+    mix-blend-mode: multiply;
+  }
 
 @keyframes drift {
   from {
@@ -254,10 +291,13 @@ a {
 }
 
 @media (prefers-color-scheme: light) {
-  .topbar {
+html:not([data-theme]) .topbar {
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
   }
 }
+html[data-theme='light'] .topbar {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+  }
 
 .brand {
   display: flex;
@@ -281,12 +321,17 @@ a {
 }
 
 @media (prefers-color-scheme: light) {
-  .brand-mark span {
+html:not([data-theme]) .brand-mark span {
     background: linear-gradient(96deg, var(--k-indigo), var(--k-magenta));
     -webkit-background-clip: text;
     background-clip: text;
   }
 }
+html[data-theme='light'] .brand-mark span {
+    background: linear-gradient(96deg, var(--k-indigo), var(--k-magenta));
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
 
 .brand-sub {
   font-size: 0.62rem;
@@ -335,10 +380,13 @@ a {
 }
 
 @media (prefers-color-scheme: light) {
-  .tabs {
+html:not([data-theme]) .tabs {
     background: rgba(255, 255, 255, 0.6);
   }
 }
+html[data-theme='light'] .tabs {
+    background: rgba(255, 255, 255, 0.6);
+  }
 
 .tab {
   position: relative;
@@ -458,10 +506,13 @@ main {
 }
 
 @media (prefers-color-scheme: light) {
-  .card-quiet {
+html:not([data-theme]) .card-quiet {
     background: rgba(255, 255, 255, 0.5);
   }
 }
+html[data-theme='light'] .card-quiet {
+    background: rgba(255, 255, 255, 0.5);
+  }
 
 .card-head {
   display: flex;
@@ -849,12 +900,17 @@ tr.selected {
 }
 
 @media (prefers-color-scheme: light) {
-  .chip-warn {
+html:not([data-theme]) .chip-warn {
     color: #7d6600;
     border-color: rgba(154, 123, 0, 0.4);
     background: rgba(240, 250, 0, 0.22);
   }
 }
+html[data-theme='light'] .chip-warn {
+    color: #7d6600;
+    border-color: rgba(154, 123, 0, 0.4);
+    background: rgba(240, 250, 0, 0.22);
+  }
 
 /* -------------------------------------------------------------- notices -- */
 
@@ -990,10 +1046,13 @@ tr.selected {
 }
 
 @media (prefers-color-scheme: light) {
-  .stat-warn .stat-value {
+html:not([data-theme]) .stat-warn .stat-value {
     color: #8a6d00;
   }
 }
+html[data-theme='light'] .stat-warn .stat-value {
+    color: #8a6d00;
+  }
 
 /* ------------------------------------------------------------ web clock -- */
 
@@ -1018,12 +1077,17 @@ tr.selected {
 }
 
 @media (prefers-color-scheme: light) {
-  .clock-time {
+html:not([data-theme]) .clock-time {
     background: linear-gradient(180deg, var(--k-navy), var(--k-indigo));
     -webkit-background-clip: text;
     background-clip: text;
   }
 }
+html[data-theme='light'] .clock-time {
+    background: linear-gradient(180deg, var(--k-navy), var(--k-indigo));
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
 
 .clock-state {
   font-size: 0.9rem;
@@ -1159,10 +1223,13 @@ tr.selected {
 }
 
 @media (prefers-color-scheme: light) {
-  .stamp-date {
+html:not([data-theme]) .stamp-date {
     color: #8a6d00;
   }
 }
+html[data-theme='light'] .stamp-date {
+    color: #8a6d00;
+  }
 
 /* ---------------------------------------------------------------- login -- */
 
@@ -1419,7 +1486,7 @@ tr.selected {
 }
 
 .swatch-required {
-  border-top: 2px solid var(--k-yellow) !important;
+  border-top: 2px solid var(--warn) !important;
   width: 0.85rem !important;
 }
 
@@ -1683,4 +1750,383 @@ tr.selected {
   background: var(--good);
   margin-right: 0.4rem;
   animation: pulse 2.4s var(--ease-soft) infinite;
+}
+
+/* =========================================================================
+ * Extended palette, theming and the guide.
+ *
+ * Konecta's own colours carry the brand, but a brand palette is not a UI
+ * palette: it has no quiet greys, no elevation, and its yellow is unreadable
+ * as text. What follows keeps the brand hues for anything that signals, and
+ * adds the neutrals and support tones an interface needs to stay calm around
+ * them.
+ * ========================================================================= */
+
+:root {
+  /* Support tones — tuned to sit beside the brand rather than compete. */
+  --k-violet: #7c5cff;
+  --k-aqua: #2ee6c5;
+  --k-amber: #ffb020;
+  --k-rose: #ff6b8b;
+  --k-sky: #5ec8ff;
+
+  /* Elevation, so surfaces read as stacked rather than merely translucent. */
+  --elev-1: 0 1px 2px rgba(3, 4, 22, 0.4);
+  --elev-2: 0 8px 24px -12px rgba(3, 4, 22, 0.7);
+  --elev-3: 0 24px 60px -28px rgba(3, 4, 22, 0.9);
+
+  /* Warn is the one brand colour that cannot be used as-is: #f0fa00 on dark
+     glass is barely legible. Amber carries the same meaning and can be read. */
+  --warn: var(--k-amber);
+  --error: var(--k-rose);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--k-violet) 45%, transparent);
+
+  --dur-fast: 140ms;
+  --dur-slow: 420ms;
+}
+
+/* A crisper, warmer light theme. The previous one was correct but cold; paper
+   white with a hint of the brand indigo reads as considered rather than blank. */
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) {
+    --k-mist: #f4f6fd;
+    --glass: rgba(255, 255, 255, 0.82);
+    --glass-strong: rgba(255, 255, 255, 0.95);
+    --glass-sunken: rgba(240, 243, 252, 0.9);
+    --hairline: rgba(23, 27, 74, 0.12);
+    --hairline-soft: rgba(23, 27, 74, 0.06);
+    --sheen: rgba(255, 255, 255, 1);
+
+    --text: #10132e;
+    --text-dim: #4d5480;
+    --text-faint: #767ea6;
+
+    --good: #0a9e8e;
+    --warn: #b06f00;
+    --error: #d63b60;
+
+    --elev-1: 0 1px 2px rgba(23, 27, 74, 0.07);
+    --elev-2: 0 10px 28px -16px rgba(23, 27, 74, 0.3);
+    --elev-3: 0 26px 60px -32px rgba(23, 27, 74, 0.36);
+    --shadow-lift: var(--elev-2);
+  }
+}
+
+html[data-theme='light'] {
+  --k-mist: #f4f6fd;
+  --glass: rgba(255, 255, 255, 0.82);
+  --glass-strong: rgba(255, 255, 255, 0.95);
+  --glass-sunken: rgba(240, 243, 252, 0.9);
+  --hairline: rgba(23, 27, 74, 0.12);
+  --hairline-soft: rgba(23, 27, 74, 0.06);
+  --sheen: rgba(255, 255, 255, 1);
+
+  --text: #10132e;
+  --text-dim: #4d5480;
+  --text-faint: #767ea6;
+
+  --good: #0a9e8e;
+  --warn: #b06f00;
+  --error: #d63b60;
+
+  --elev-1: 0 1px 2px rgba(23, 27, 74, 0.07);
+  --elev-2: 0 10px 28px -16px rgba(23, 27, 74, 0.3);
+  --elev-3: 0 26px 60px -32px rgba(23, 27, 74, 0.36);
+  --shadow-lift: var(--elev-2);
+}
+
+/* Switching theme should feel like a dimmer, not a light switch. Only colour
+   properties transition — layout and transform are left alone so nothing
+   shifts while the palette crossfades. */
+body,
+.card,
+.kpi,
+.stat,
+.topbar,
+.tabs,
+.btn,
+input,
+select,
+textarea,
+.board-cell,
+.chip,
+.banner,
+.guide {
+  transition:
+    background-color var(--dur-slow) var(--ease-soft),
+    border-color var(--dur-slow) var(--ease-soft),
+    color var(--dur-slow) var(--ease-soft),
+    box-shadow var(--dur-slow) var(--ease-soft);
+}
+
+/* A visible focus ring everywhere, in the support violet so it never reads as
+   an error state. Keyboard users get it; pointer users never see it. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 6px;
+}
+
+/* ------------------------------------------------------------ theme toggle -- */
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.16rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--glass-sunken);
+}
+
+.theme-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.32rem 0.5rem;
+  border-radius: 999px;
+  transition:
+    background var(--dur) var(--ease-soft),
+    color var(--dur) var(--ease-soft),
+    transform var(--dur-fast) var(--ease);
+}
+
+.theme-toggle button:hover {
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.theme-toggle button[aria-pressed='true'] {
+  background: linear-gradient(120deg, var(--k-indigo), var(--k-violet));
+  color: #fff;
+  box-shadow: var(--elev-1);
+}
+
+/* ------------------------------------------------------------------ guide -- */
+
+.guide-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(3, 4, 22, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: fade 260ms var(--ease-soft) both;
+}
+
+.guide {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  width: min(30rem, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-strong);
+  border-left: 1px solid var(--hairline);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  box-shadow: var(--elev-3);
+  animation: slide-in 420ms var(--ease) both;
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0.4;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.guide-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.guide-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.1rem;
+}
+
+.guide-foot {
+  padding: 0.6rem 1.1rem;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.75rem;
+}
+
+.guide-purpose {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0 0 0.9rem;
+  color: var(--text);
+}
+
+.guide-section {
+  margin-bottom: 1.3rem;
+}
+
+.guide-section h3 {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--text-faint);
+  margin-bottom: 0.5rem;
+}
+
+.guide-steps {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.guide-steps li {
+  font-size: 0.83rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.guide-steps strong {
+  display: block;
+  color: var(--text);
+  font-weight: 620;
+  margin-bottom: 0.1rem;
+}
+
+.guide-steps li::marker {
+  color: var(--k-violet);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.guide-block {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 0.9rem;
+  margin-bottom: 0.8rem;
+  background: var(--glass);
+}
+
+.guide-block h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.92rem;
+}
+
+.guide-block h5 {
+  margin: 0.7rem 0 0.25rem;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+.guide-can {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
+.guide-can ul {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.guide-can li {
+  margin-bottom: 0.25rem;
+}
+
+.guide-can > div:first-child li::marker {
+  color: var(--good);
+}
+
+.guide-can > div:last-child li::marker {
+  color: var(--error);
+}
+
+@media (max-width: 560px) {
+  .guide-can {
+    grid-template-columns: 1fr;
+  }
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--hairline);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--glass-sunken);
+}
+
+/* The one-time nudge toward the guide. */
+.guide-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 1.3rem;
+  transform: translateX(-50%);
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--glass-strong);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  box-shadow: var(--elev-3);
+  animation: nudge 620ms var(--ease) both;
+  max-width: calc(100vw - 2rem);
+}
+
+@keyframes nudge {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 1.2rem);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.help-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: var(--glass-sunken);
+  color: var(--text-dim);
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    color var(--dur) var(--ease-soft),
+    border-color var(--dur) var(--ease-soft);
+}
+
+.help-btn:hover {
+  color: var(--text);
+  border-color: var(--k-violet);
+  transform: translateY(-1px) scale(1.05);
 }

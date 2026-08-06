@@ -4,6 +4,10 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { SessionProvider } from './state';
 import './styles.css';
+import { initTheme } from './theme';
+
+// Applied before the first paint so the page never flashes the wrong theme.
+initTheme();
 
 /**
  * The aurora and grain sit behind everything, outside the router, so they are

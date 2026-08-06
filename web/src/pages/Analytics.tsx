@@ -135,7 +135,7 @@ export function Analytics() {
               yFormat={(v) => `${v}%`}
               series={[
                 { label: 'Adherence', values: trend.map((t) => t.adherencePct), color: 'var(--k-cyan)', area: true },
-                { label: 'Target 90%', values: trend.map(() => 90), color: 'var(--k-yellow)', dashed: true },
+                { label: 'Target 90%', values: trend.map(() => 90), color: 'var(--warn)', dashed: true },
               ]}
             />
           </Card>

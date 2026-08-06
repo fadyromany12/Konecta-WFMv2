@@ -189,7 +189,7 @@ export function Planning() {
                   {
                     label: 'Goal',
                     values: daytime.map(() => Math.round((settings?.serviceGoal ?? 0.8) * 100)),
-                    color: 'var(--k-yellow)',
+                    color: 'var(--warn)',
                     dashed: true,
                   },
                 ]}

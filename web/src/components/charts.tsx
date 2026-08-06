@@ -189,7 +189,7 @@ export function CoverageChart({
         <path
           d={required.map((v, i) => `${i === 0 ? 'M' : 'L'} ${scaleX(i, count)} ${scaleY(v, max)}`).join(' ')}
           fill="none"
-          stroke="var(--k-yellow)"
+          stroke="var(--warn)"
           strokeWidth="2"
           vectorEffect="non-scaling-stroke"
         />
