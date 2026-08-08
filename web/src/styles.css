@@ -3431,3 +3431,98 @@ html[data-theme='light'] .guide-role-note h3 {
   background: var(--glass);
   color: var(--text-dim);
 }
+
+/* ------------------------------------------------------------- team week */
+
+.team-week th,
+.team-week td {
+  vertical-align: top;
+}
+
+.team-week thead th.is-today {
+  border-bottom: 2px solid var(--accent);
+}
+
+.tw-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  line-height: 1.25;
+  font-size: 0.74rem;
+}
+
+.tw-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tw-name .mono {
+  font-size: 0.68rem;
+  font-weight: 400;
+}
+
+.tw-cell {
+  min-width: 6.2rem;
+  border-radius: var(--radius-sm);
+  transition: background 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+
+/* The drop target, lit only where a drop would actually be accepted. */
+.tw-cell.is-target {
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tw-cell.is-past {
+  opacity: 0.6;
+}
+
+.tw-off {
+  color: var(--text-faint);
+}
+
+.tw-shift {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: grab;
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 0.24rem 0.4rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: linear-gradient(
+    120deg,
+    color-mix(in oklab, var(--k-cyan) 22%, transparent),
+    color-mix(in oklab, var(--k-teal) 14%, transparent)
+  );
+  color: var(--text);
+  transition: transform 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+
+.tw-shift:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--elev-1);
+}
+
+.tw-shift:active {
+  cursor: grabbing;
+}
+
+.tw-shift + .tw-shift {
+  margin-top: 0.25rem;
+}
+
+.tw-cell.is-past .tw-shift {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-shift:hover {
+    transform: none;
+  }
+}

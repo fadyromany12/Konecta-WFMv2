@@ -6,6 +6,7 @@ import {
   deleteRow,
   insertRowAbove,
   resolveRowDates,
+  shiftByDays,
   scheduledPaidMinutes,
   shiftSpan,
   toSegments,
@@ -177,5 +178,49 @@ describe('which shift a moment belongs to', () => {
     const shifts = [day('2025-06-11', '06:00', '14:00'), day('2025-06-11', '18:00', '22:00')];
     const active = activeShift(shifts, '2025-06-11 09:00', '2025-06-11');
     expect(active?.rows[0].startAt).toBe('2025-06-11 06:00');
+  });
+});
+
+describe('moving a shift to another day', () => {
+  it('moves every stamp by the same number of days', () => {
+    const moved = shiftByDays(overnight(), 1);
+    expect(moved.rows[0].startAt).toBe('2026-03-02 23:00');
+    expect(moved.endAt).toBe('2026-03-02 07:30');
+  });
+
+  it('keeps an overnight shift overnight', () => {
+    // The trap: re-deriving dates from times would be right for a day shift
+    // and would collapse this one onto a single date.
+    const resolved = resolveRowDates(overnight());
+    const moved = shiftByDays(resolved, 3);
+    expect(moved.rows[0].startAt).toBe('2026-03-04 23:00');
+    // Rows after midnight keep their own, later, date.
+    expect(moved.rows[1].startAt).toBe('2026-03-05 01:00');
+    expect(shiftSpan(moved).minutes).toBe(shiftSpan(resolved).minutes);
+  });
+
+  it('moves backwards as readily as forwards', () => {
+    const moved = shiftByDays(overnight(), -1);
+    expect(moved.rows[0].startAt).toBe('2026-02-28 23:00');
+  });
+
+  it('crosses a month end without losing a day', () => {
+    const shift: ScheduleShift = {
+      shiftNo: 1,
+      rows: [{ startAt: '2026-01-31 09:00', activityKey: 'SHIFT_START' }],
+      endAt: '2026-01-31 17:00',
+    };
+    expect(shiftByDays(shift, 1).rows[0].startAt).toBe('2026-02-01 09:00');
+  });
+
+  it('never changes the clock times', () => {
+    const moved = shiftByDays(overnight(), 14);
+    expect(moved.rows.map((r) => r.startAt.slice(11))).toEqual(
+      overnight().rows.map((r) => r.startAt.slice(11)),
+    );
+  });
+
+  it('is a no-op at zero', () => {
+    expect(shiftByDays(overnight(), 0)).toEqual(overnight());
   });
 });

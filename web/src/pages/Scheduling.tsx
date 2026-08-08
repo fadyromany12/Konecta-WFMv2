@@ -20,6 +20,7 @@ import {
 import { addDays, durationBetween, rollForward, timeOf, today, withTime } from '../lib/time';
 import { Planning } from './Planning';
 import { ForecastEntry } from './ForecastEntry';
+import { TeamWeek } from './TeamWeek';
 
 export function Scheduling() {
   return (
@@ -27,6 +28,7 @@ export function Scheduling() {
       <SubTabs
         items={[
           { to: '/scheduling', label: 'Edit Advisor Schedule' },
+          { to: '/scheduling/week', label: 'Team Week' },
           { to: '/scheduling/group', label: 'Group Schedule Exceptions' },
           { to: '/scheduling/forecast', label: 'Forecast & Coverage' },
           { to: '/scheduling/volumes', label: 'Enter Forecast' },
@@ -34,6 +36,7 @@ export function Scheduling() {
       />
       <Routes>
         <Route index element={<EditSchedule />} />
+        <Route path="week" element={<TeamWeek />} />
         <Route path="group" element={<GroupExceptions />} />
         <Route path="forecast" element={<Planning />} />
         <Route path="volumes" element={<ForecastEntry />} />
@@ -57,7 +60,7 @@ function EditSchedule() {
   const [personId, setPersonId] = useState<number | null>(
     params.get('userId') ? Number(params.get('userId')) : null,
   );
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(params.get('date') ?? today());
   const [shifts, setShifts] = useState<ScheduleShift[]>([]);
   const [selected, setSelected] = useState<{ shift: number; row: number } | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -72,6 +75,14 @@ function EditSchedule() {
     const requested = params.get('userId');
     if (requested && Number(requested) !== personId) setPersonId(Number(requested));
   }, [params, personId]);
+
+  // A shift clicked in the team week arrives with a day attached. Keyed on the
+  // parameter rather than on `date`, so picking a different day afterwards is
+  // not immediately snapped back to whatever the URL still says.
+  const dateParam = params.get('date');
+  useEffect(() => {
+    if (dateParam) setDate(dateParam);
+  }, [dateParam]);
 
   const people = useAsync(
     () => (group ? api.get<{ people: Person[] }>(`/people?group=${encodeURIComponent(group)}`) : Promise.resolve({ people: [] })),

@@ -26,11 +26,11 @@ import type { Role } from './guide';
  * is offered the new one; anyone mid-tour is restarted rather than resumed into
  * steps that may no longer line up.
  */
-export const TUTORIAL_VERSION = 3;
+export const TUTORIAL_VERSION = 4;
 
 /** Shown when a returning user is re-offered the tour. Keep it to one line. */
 export const WHATS_NEW =
-  'Updated for live updates, the ⌘K palette and bulk approval.';
+  'Updated for Team Week, live updates, the ⌘K palette and bulk approval.';
 
 export interface TourStep {
   /**
@@ -145,6 +145,16 @@ const APPROVALS: TourStep[] = [
   },
 ];
 
+const TEAM_WEEK: TourStep[] = [
+  {
+    route: '/scheduling/week',
+    target: '.team-week',
+    placement: 'top',
+    title: 'The whole team, the whole week',
+    body: 'Headcount sits under each date, so a thin Friday shows itself. Drag a shift to move the day; click it to open that day in the editor.',
+  },
+];
+
 const PLANNING: TourStep[] = [
   {
     route: '/scheduling/forecast',
@@ -180,9 +190,9 @@ const GUIDE: TourStep[] = [
  */
 export const TOURS: Record<Role, TourStep[]> = {
   ADVISOR: [...CLOCK, ...SELF_SERVICE, ...REPORT, ...BELL, ...GUIDE],
-  TEAM_LEADER: [...LIVE_BOARD, ...PULSE_LINE, ...APPROVALS, ...BELL, ...PALETTE, ...GUIDE],
+  TEAM_LEADER: [...LIVE_BOARD, ...PULSE_LINE, ...TEAM_WEEK, ...APPROVALS, ...BELL, ...PALETTE, ...GUIDE],
   TRAINER: [...LIVE_BOARD, ...APPROVALS, ...REPORT, ...PALETTE, ...GUIDE],
-  OPS_MANAGER: [...LIVE_BOARD, ...PLANNING, ...ANALYTICS, ...APPROVALS, ...PALETTE, ...GUIDE],
+  OPS_MANAGER: [...LIVE_BOARD, ...TEAM_WEEK, ...PLANNING, ...ANALYTICS, ...APPROVALS, ...PALETTE, ...GUIDE],
   ADMIN: [...LIVE_BOARD, ...PALETTE, ...ANALYTICS, ...BELL, ...GUIDE],
 };
 

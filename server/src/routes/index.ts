@@ -34,8 +34,10 @@ import {
   applyGroupException,
   getShifts,
   getShiftsInRange,
+  moveShift,
   removeGroupException,
   saveShifts,
+  teamWeek,
 } from '../services/scheduling.js';
 import {
   generateTimecard,
@@ -187,6 +189,58 @@ api.post(
 );
 
 // --------------------------------------------------------------- schedules
+// Registered before `/schedules/:userId`, or Express reads "team" as a user id.
+api.get(
+  '/schedules/team',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 6));
+    if (end < start) throw new HttpError(400, 'The end of the range is before the start.');
+    if (diffMinutes(`${start} 00:00`, `${end} 00:00`) > 31 * 24 * 60) {
+      throw new HttpError(400, 'Ask for a month at a time or less.');
+    }
+    const userIds = await resolveGroup(req.user!, req.query.group as string | undefined);
+    res.json(await teamWeek({ userIds, start, end }));
+  }),
+);
+
+api.post(
+  '/schedules/move',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        userId: z.number().int().positive(),
+        fromDate: dateSchema,
+        toDate: dateSchema,
+        shiftNo: z.number().int().positive(),
+      })
+      .parse(req.body);
+    if (!(await canManage(req.user!, body.userId))) throw new HttpError(403, 'You cannot edit that schedule.');
+
+    const result = await moveShift({ ...body, today: todayStr(), actorId: req.user!.id });
+    if (result.ok) {
+      // Both days change shape, so both cards have to be re-derived.
+      for (const date of [body.fromDate, body.toDate]) {
+        await generateTimecard({ userId: body.userId, date, actorId: req.user!.id });
+      }
+      const who = (await getUser(body.userId))?.name ?? `#${body.userId}`;
+      emit('schedule.changed', body.userId, `${req.user!.name} moved ${who}'s shift to ${body.toDate}`, {
+        date: body.toDate,
+      });
+      await notify(
+        [body.userId],
+        'Your shift moved',
+        `${req.user!.name} moved your ${body.fromDate} shift to ${body.toDate}. Check My Week.`,
+      );
+    }
+    res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
 api.get(
   '/schedules/:userId',
   authenticate,

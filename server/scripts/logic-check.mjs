@@ -1,0 +1,309 @@
+/**
+ * The logic pass: every endpoint and, more importantly, every refusal.
+ *
+ * The unit suite covers the rules as pure functions. This covers the wiring —
+ * that the rule is actually reached through HTTP, by the right roles, against a
+ * real database. Most of what it asserts is that something is *refused*: an
+ * advisor reading a payroll summary, a card saved with a gap, a paid code on an
+ * unpaid activity, a rule change dated yesterday, an approval on a shift still
+ * running. Those are the paths that cost money when they quietly stop working.
+ *
+ * Run it against a server that is already up:
+ *
+ *     npm run dev                      # or node dist/index.js
+ *     npm run check:logic              # defaults to http://localhost:4000/api
+ *     BASE=https://host/api npm run check:logic
+ *
+ * It is deliberately not a vitest file. It needs a running server and a seeded
+ * database, which is a different thing from a unit test and should not be able
+ * to fail `npm test` because a port was busy.
+ *
+ * Dates are read from the seeded data rather than hard-coded, so it keeps
+ * working tomorrow.
+ */
+const BASE = process.env.BASE ?? 'http://localhost:4000/api';
+
+/** Dates relative to today, so this keeps working tomorrow. */
+const day = (offset) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + offset);
+  return d.toISOString().slice(0, 10);
+};
+/** A recent finished day, one outside a team leader's window, and the range. */
+const RECENT = day(-3), OLD = day(-19), RANGE_START = day(-19), RANGE_END = day(0);
+/** Comfortably beyond any edit window, for the future-dated rule change. */
+const FUTURE = day(120);
+/** One day on from an arbitrary date, for the shift-move checks. */
+const addDay = (date, n) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+let pass = 0, fail = 0;
+const failures = [];
+
+function check(name, ok, detail = '') {
+  if (ok) { pass++; }
+  else { fail++; failures.push(`${name}${detail ? ' — ' + detail : ''}`); }
+}
+
+async function call(method, path, token, body) {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* html */ }
+  return { status: res.status, body: json, raw: text };
+}
+
+const tok = async (email) =>
+  (await call('POST', '/auth/login', null, { email, password: 'pulse123' })).body?.token;
+
+const TL   = await tok('mariam.saleh@konecta.example');   // day team leader
+const NTL  = await tok('youssef.adel@konecta.example');   // night team leader
+const OM   = await tok('nadia.farouk@konecta.example');
+const ADV  = await tok('layla.mahmoud@konecta.example');
+const ADM  = await tok('admin@konecta.example');
+const TRN  = await tok('omar.hassan@konecta.example');
+
+console.log('=== AUTH & ACCESS ===');
+check('bad password refused', (await call('POST','/auth/login',null,{email:'admin@konecta.example',password:'wrong'})).status === 401);
+check('unknown user refused', (await call('POST','/auth/login',null,{email:'nobody@x.com',password:'pulse123'})).status === 401);
+check('no token refused', (await call('GET','/clock',null)).status === 401);
+check('garbage token refused', (await call('GET','/clock','not-a-token')).status === 401);
+check('all six roles sign in', [TL,NTL,OM,ADV,ADM,TRN].every(Boolean));
+
+console.log('=== ROLE BOUNDARIES ===');
+check('advisor cannot read payroll summary', (await call('GET','/payroll/summary?start=2000-01-01&end=2100-01-01',ADV)).status === 403);
+check('advisor cannot edit a schedule', (await call('PUT',`/schedules/6/${day(2)}`,ADV,{shifts:[]})).status === 403);
+check('advisor cannot see the audit trail', (await call('GET','/admin/audit',ADV)).status === 403);
+check('advisor cannot run payroll', (await call('POST','/payroll/run',ADV,{start:day(-7),end:day(-6)})).status === 403);
+check('team leader cannot run payroll', (await call('POST','/payroll/run',TL,{start:day(-7),end:day(-6)})).status === 403);
+const people = (await call('GET','/people',TL)).body.people;
+const otherTeam = (await call('GET','/people',NTL)).body.people;
+const foreign = otherTeam.find((p) => !people.some((q) => q.id === p.id));
+if (foreign) {
+  check("cannot view another team's timecard", (await call('GET',`/timecards/${foreign.id}/${day(-3)}`,TL)).status === 403);
+} else check('teams overlap so cross-team check skipped', true);
+
+console.log('=== TIMECARD RULES ===');
+const target = people.find((p) => p.role === 'ADVISOR');
+const card = (await call('GET',`/timecards/${target.id}/${day(-3)}`,TL)).body;
+check('timecard loads with a decision', !!card?.decision);
+check('edit window reported', typeof card.decision.windowDays === 'number');
+// Way outside a team leader's 3-day window.
+const old = (await call('GET',`/timecards/${target.id}/${OLD}`,TL)).body;
+check('old card outside TL window is refused', old?.decision?.allowed === false, JSON.stringify(old?.decision));
+check('ops manager reaches further back', (await call('GET',`/timecards/${target.id}/${OLD}`,OM)).body?.decision?.allowed === true);
+// Save with a gap should be refused.
+const bad = await call('PUT',`/timecards/${target.id}/${RECENT}`,TL,{rows:[
+  {code:'(W)',project:'A123',activity:'01-001',startAt:`${RECENT} 09:00`,endAt:`${RECENT} 10:00`},
+  {code:'(W)',project:'A123',activity:'01-001',startAt:`${RECENT} 11:00`,endAt:`${RECENT} 12:00`},
+]});
+check('gap in a timecard refused', bad.status === 400, `status ${bad.status}`);
+// Paid code on unpaid activity.
+const unpaid = await call('PUT',`/timecards/${target.id}/${RECENT}`,TL,{rows:[
+  {code:'(W)',project:'A123',activity:'99-001',startAt:`${RECENT} 09:00`,endAt:`${RECENT} 10:00`},
+]});
+check('paid code on unpaid activity refused', unpaid.status === 400, `status ${unpaid.status}`);
+
+console.log('=== APPROVAL RULES ===');
+const summary = (await call('GET',`/payroll/summary?start=${RANGE_START}&end=${RANGE_END}`,TL)).body.rows;
+check('payroll summary returns rows', summary.length > 0);
+const inProgress = summary.find((r) => r.inProgress);
+if (inProgress) {
+  const r = await call('POST',`/timecards/${inProgress.userId}/${inProgress.payrollDate}/approve`,TL,{approved:true});
+  check('cannot approve a running shift', r.body?.ok === false, JSON.stringify(r.body?.message));
+} else check('no running shift to test (skipped)', true);
+const bulk = (await call('POST','/payroll/approve-clean',TL,{start:OLD,end:RANGE_END})).body;
+check('bulk approve returns a result', Array.isArray(bulk?.approved));
+check('bulk approve refuses cards with exceptions',
+  bulk.skipped.every((s) => s.reason && s.reason.length > 0), JSON.stringify(bulk.skipped.slice(0,2)));
+const second = (await call('POST','/payroll/approve-clean',TL,{start:OLD,end:RANGE_END})).body;
+check('bulk approve is idempotent', second.approved.length === 0, `approved ${second.approved.length} on rerun`);
+
+console.log('=== CLOCK RULES ===');
+const clock = (await call('GET','/clock',ADV)).body;
+check('clock state returned', typeof clock?.canClockOn === 'boolean');
+if (!clock.canClockOn) {
+  const r = await call('POST','/clock/punch',ADV,{type:'ON',activity:'01-001'});
+  check('cannot clock on outside the window', r.body?.ok === false, JSON.stringify(r.body?.message));
+} else check('advisor is inside their window (skipped)', true);
+check('unknown activity refused',
+  (await call('POST','/clock/punch',ADV,{type:'ON',activity:'zz-999'})).body?.ok === false);
+
+console.log('=== SCHEDULING RULES ===');
+const shiftRule = await call('POST','/admin/shift-rule',TL,{userId:target.id,shiftRule:'CR2',effectiveDate:day(-7)});
+check('shift rule change in the past refused', shiftRule.status === 400, `status ${shiftRule.status}`);
+check('shift rule change in the future allowed',
+  (await call('POST','/admin/shift-rule',TL,{userId:target.id,shiftRule:'CR2',effectiveDate:FUTURE})).status === 200);
+const ge = await call('POST','/schedules/group-exception',TL,{date:day(2),activityKey:'TEAM_MEETING',startTime:'10:00',endTime:'10:30'});
+check('group exception applies', Array.isArray(ge.body?.applied), JSON.stringify(ge.body).slice(0,120));
+const unge = await call('POST','/schedules/group-exception/remove',TL,{date:day(2),activityKey:'TEAM_MEETING',startTime:'10:00',endTime:'10:30'});
+check('group exception can be removed', (unge.body?.removed?.length ?? 0) === (ge.body?.applied?.length ?? -1),
+  `applied ${ge.body?.applied?.length} removed ${unge.body?.removed?.length}`);
+
+console.log('=== TEAM WEEK ===');
+const tw = await call('GET',`/schedules/team?start=${day(0)}&end=${day(6)}`,TL);
+check('team week returns seven days', tw.body?.dates?.length === 7, JSON.stringify(tw.body?.dates));
+check('team week returns people', (tw.body?.people?.length ?? 0) > 0);
+check('every person has a cell per date',
+  (tw.body?.people ?? []).every((p) => p.days.length === 7));
+check('team week is supervisor only', (await call('GET',`/schedules/team?start=${day(0)}&end=${day(6)}`,ADV)).status === 403);
+check('team week refuses a backwards range', (await call('GET',`/schedules/team?start=${day(6)}&end=${day(0)}`,TL)).status === 400);
+check('team week refuses a huge range', (await call('GET',`/schedules/team?start=${day(0)}&end=${day(200)}`,TL)).status === 400);
+
+// Move a future shift onto a day that person has off, then put it back. A day
+// that already has a shift is a different rule — overlap — and is checked below.
+const movable = (tw.body?.people ?? [])
+  .flatMap((p) =>
+    p.days
+      .filter((d) => d.date > day(0) && d.shifts.length === 1)
+      .map((d) => ({
+        userId: p.userId,
+        ...d,
+        free: p.days.find((o) => o.date > day(0) && o.date !== d.date && o.shifts.length === 0)?.date,
+      })),
+  )
+  .find((d) => d.free);
+if (movable) {
+  const to = movable.free;
+  const moved = await call('POST','/schedules/move',TL,
+    {userId:movable.userId,fromDate:movable.date,toDate:to,shiftNo:movable.shifts[0].shiftNo});
+  check('a future shift can be moved', moved.body?.ok === true, JSON.stringify(moved.body).slice(0,160));
+  if (moved.body?.ok) {
+    const after = (await call('GET',`/schedules/${movable.userId}?start=${movable.date}&end=${movable.date}`,TL)).body;
+    check('the source day is empty afterwards',
+      (after.days.find((d) => d.date === movable.date)?.shifts.length ?? 0) === 0);
+    const landed = (await call('GET',`/schedules/${movable.userId}?start=${to}&end=${to}`,TL)).body;
+    check('the shift landed on the target day', (landed.days[0]?.shifts.length ?? 0) > 0);
+    check('the clock time survived the move',
+      landed.days[0].shifts.some((s) => s.rows[0].startAt.slice(11) === movable.shifts[0].rows[0].startAt.slice(11)),
+      JSON.stringify(landed.days[0]?.shifts?.map((s)=>s.rows[0].startAt)));
+    // Put it back so a re-run finds the week as it was.
+    const back = landed.days[0].shifts.find((s) => s.rows[0].startAt.slice(11) === movable.shifts[0].rows[0].startAt.slice(11));
+    await call('POST','/schedules/move',TL,{userId:movable.userId,fromDate:to,toDate:movable.date,shiftNo:back.shiftNo});
+  }
+} else check('no future shift to move (skipped)', true);
+
+// Onto a day the same person already works: allowed only if the two fit.
+const doubled = (tw.body?.people ?? [])
+  .map((p) => ({
+    userId: p.userId,
+    busy: p.days.filter((d) => d.date > day(0) && d.shifts.length === 1),
+  }))
+  .find((p) => p.busy.length >= 2);
+if (doubled) {
+  const [a, b] = doubled.busy;
+  const onto = await call('POST','/schedules/move',TL,
+    {userId:doubled.userId,fromDate:a.date,toDate:b.date,shiftNo:a.shifts[0].shiftNo});
+  check('a move onto an occupied day is judged, not assumed',
+    typeof onto.body?.ok === 'boolean' && (onto.body.ok === true || Array.isArray(onto.body.issues)),
+    JSON.stringify(onto.body).slice(0,160));
+  if (onto.body?.ok) {
+    // It fitted; both shifts are now on one day. Put the first one back.
+    const both = (await call('GET',`/schedules/${doubled.userId}?start=${b.date}&end=${b.date}`,TL)).body;
+    const back = both.days[0].shifts.find((s) => s.rows[0].startAt.slice(11) === a.shifts[0].rows[0].startAt.slice(11));
+    if (back) {
+      await call('POST','/schedules/move',TL,
+        {userId:doubled.userId,fromDate:b.date,toDate:a.date,shiftNo:back.shiftNo});
+    }
+  }
+} else check('nobody works two future days to double up (skipped)', true);
+
+check('a move into the past is refused',
+  (await call('POST','/schedules/move',TL,{userId:target.id,fromDate:day(-3),toDate:day(-2),shiftNo:1})).body?.ok === false);
+check('a move onto the same day is refused',
+  (await call('POST','/schedules/move',TL,{userId:target.id,fromDate:day(2),toDate:day(2),shiftNo:1})).body?.ok === false);
+check('advisors cannot move shifts',
+  (await call('POST','/schedules/move',ADV,{userId:target.id,fromDate:day(2),toDate:day(3),shiftNo:1})).status === 403);
+
+console.log('=== FORECAST & PLANNING ===');
+const fc = (await call('GET',`/forecast?date=${day(2)}`,TL)).body;
+check('forecast returns a full grid', fc?.forecast?.length === 48, `${fc?.forecast?.length} intervals`);
+check('coverage computed', Array.isArray(fc?.coverage) && fc.coverage.length === 48);
+check('summary has projected service level', typeof fc?.summary?.projectedServiceLevel === 'number');
+const saved = await call('PUT','/forecast',TL,{date:day(12),rows:[{startTime:'09:00',volume:40,ahtSeconds:240}]});
+check('forecast can be saved', saved.status === 200, `status ${saved.status}`);
+const reread = (await call('GET',`/forecast?date=${day(12)}`,TL)).body;
+check('saved forecast reads back', reread.forecast.find((r)=>r.startTime==='09:00')?.volume === 40);
+const staffing = (await call('GET','/forecast/staffing?volume=100&ahtSeconds=240&serviceGoal=0.8&targetSeconds=20&shrinkage=0.3',TL)).body;
+check('erlang staffing returns agents', staffing.requiredAgents > staffing.agentsOnPhone, JSON.stringify(staffing));
+check('erlang service level between 0 and 1', staffing.serviceLevel >= 0 && staffing.serviceLevel <= 1);
+
+console.log('=== LEAVE COVER CHECK ===');
+const reqs = (await call('GET','/absence/requests',TL)).body.requests;
+const pendingReq = reqs.find((r) => r.status === 'PENDING');
+if (pendingReq) {
+  const impact = await call('GET',`/absence/requests/${pendingReq.id}/impact`,TL);
+  check('leave impact computed', impact.status === 200 && typeof impact.body?.summary === 'string', JSON.stringify(impact.body).slice(0,140));
+  check('leave impact has a severity', ['none','watch','high'].includes(impact.body?.severity));
+} else check('no pending request to assess (skipped)', true);
+check('accrual over-request refused',
+  (await call('POST','/absence/requests',ADV,{accrualType:'VACATION',startDate:day(24),endDate:day(53),hours:9999})).status === 400);
+
+console.log('=== ALERTS ===');
+const snap = (await call('GET','/intraday',TL)).body;
+check('intraday snapshot returns totals', typeof snap?.totals?.adherencePct === 'number');
+check('every alert has a stable key', (snap.alerts ?? []).every((a) => typeof a.key === 'string' && a.key.length > 0));
+if (snap.alerts?.length) {
+  const a = snap.alerts[0];
+  const ack = await call('POST',`/alerts/${encodeURIComponent(a.key)}/ack`,TL,{userId:a.userId});
+  check('alert can be claimed', ack.body?.ok === true, JSON.stringify(ack.body));
+  const again = await call('POST',`/alerts/${encodeURIComponent(a.key)}/ack`,NTL,{userId:a.userId});
+  check('second claimer is told who has it', again.body?.ok === false && !!again.body?.ackedByName, JSON.stringify(again.body));
+  const after = (await call('GET','/intraday',TL)).body;
+  check('claim shows on the board', after.alerts.find((x)=>x.key===a.key)?.ackedBy != null);
+  check('alert can be handed back', (await call('DELETE',`/alerts/${encodeURIComponent(a.key)}/ack`,TL)).body?.ok === true);
+} else check('no alerts to claim (skipped)', true);
+
+console.log('=== PAYROLL EXPORT ===');
+const exp = (await call('GET',`/payroll/export?start=${RANGE_START}&end=${RANGE_END}`,TL)).body;
+check('export returns rows', Array.isArray(exp?.rows));
+check('export rows carry minutes', exp.rows.every((r) => typeof r.minutes === 'number' && r.minutes >= 0));
+check('export is approved-only by default', exp.approvedOnly === true);
+
+console.log('=== REPORTS & ANALYTICS ===');
+check('adherence report', (await call('GET',`/reports/adherence?userId=${target.id}&date=${day(-3)}`,TL)).status === 200);
+const an = (await call('GET',`/analytics?start=${day(-14)}&end=${RANGE_END}`,TL)).body;
+check('analytics returns trend', Array.isArray(an?.trend) && an.trend.length > 0);
+check('analytics adherence is a percentage', an.totals.adherencePct >= 0 && an.totals.adherencePct <= 100);
+check('scorecards sorted by exceptions',
+  an.scorecards.every((s,i,arr) => i===0 || arr[i-1].exceptionCount >= s.exceptionCount));
+check('exception report', Array.isArray((await call('GET',`/reports/exceptions?start=${day(-38)}&end=${RANGE_END}`,TL)).body?.rows));
+check('query tool returns minutes',
+  ((await call('GET',`/reports/query?start=${day(-38)}&end=${RANGE_END}`,TL)).body?.rows ?? []).every((r)=>typeof r.minutes === 'number'));
+
+console.log('=== SELF SERVICE ===');
+check('swaps list', Array.isArray((await call('GET','/swaps',ADV)).body?.swaps));
+check('cannot swap with yourself',
+  (await call('POST','/swaps',ADV,{requesterDate:day(4),counterpartyId:6,counterpartyDate:day(5)})).body?.ok === false);
+check('extra hours list', Array.isArray((await call('GET','/extra-hours',ADV)).body?.offers));
+const offers = (await call('GET','/extra-hours',ADV)).body.offers;
+const closed = offers.find((o) => o.status !== 'OPEN');
+if (closed) check('cannot bid on a closed offer', (await call('POST',`/extra-hours/${closed.id}/bid`,ADV)).body?.ok === false);
+else check('no closed offer to test (skipped)', true);
+
+console.log('=== NOTIFICATIONS ===');
+const notif = (await call('GET','/notifications',TL)).body;
+check('notifications returned', Array.isArray(notif?.notifications));
+check('unread count matches', notif.unread === notif.notifications.filter((n)=>!n.read).length);
+check('mark all read', (await call('POST','/notifications/read-all',TL)).body?.ok === true);
+check('unread is zero after', (await call('GET','/notifications',TL)).body?.unread === 0);
+
+console.log('=== SPA ROUTING ===');
+for (const p of ['/dashboard','/admin/audit','/reports/query','/my']) {
+  const res = await fetch('http://localhost:4000' + p, { headers: { accept: 'text/html' } });
+  check(`page load ${p} serves the app`, res.headers.get('content-type')?.includes('text/html'), `got ${res.headers.get('content-type')}`);
+}
+
+console.log(`\n${'='.repeat(46)}`);
+console.log(`PASS ${pass}   FAIL ${fail}`);
+if (failures.length) { console.log('\nFailures:'); failures.forEach((f) => console.log('  ✗ ' + f)); }
+process.exit(fail > 0 ? 1 : 0);

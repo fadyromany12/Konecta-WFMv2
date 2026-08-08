@@ -495,9 +495,18 @@ export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> 
           title: 'Times are authoritative, dates follow',
           body: 'Type the time; the tool works out which day it lands on. That is what keeps an overnight shift on one payroll date.',
         },
+        {
+          title: 'Team Week answers “who is off on Thursday”',
+          body: 'The day editor is for one person on one day. Team Week is the whole group across seven days, with a headcount under each date — open it before you approve anything that removes a body.',
+        },
+        {
+          title: 'Drag a shift to move the day',
+          body: 'Dragging moves the whole shift and keeps its shape, so an overnight stays overnight. Click it instead to open that day in the editor and change what is inside it.',
+        },
       ],
       watchFor: [
         'A group exception that falls outside somebody’s shift is skipped and reported. It never silently moves their shift — read the skipped list.',
+        'Days that have already happened cannot be dragged. Their timecards are derived against the plan that was in force, and moving it afterwards would change what somebody was measured against.',
       ],
     },
     TRAINER: {

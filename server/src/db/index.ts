@@ -18,15 +18,27 @@ export type { Database, Row } from './driver.js';
  * fails. It should fail loudly instead, which is what happens — the first query
  * throws rather than succeeding against the wrong store.
  */
+/**
+ * A variable that exists but is blank counts as unset.
+ *
+ * Hosting dashboards create empty variables readily — you add the key, save,
+ * and fill the value in later. Treating `POSTGRES_URL=""` as "use Postgres"
+ * sends the process at libpq's defaults on localhost:5432 and it dies with a
+ * connection refused that names a database nobody configured.
+ */
+const configured = (value: string | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
 const postgresUrl =
-  process.env.PULSE_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  process.env.POSTGRES_URL ??
-  process.env.POSTGRES_URL_NON_POOLING ??
-  null;
+  configured(process.env.PULSE_DATABASE_URL) ??
+  configured(process.env.DATABASE_URL) ??
+  configured(process.env.POSTGRES_URL) ??
+  configured(process.env.POSTGRES_URL_NON_POOLING);
 
 const sqliteFile =
-  process.env.PULSE_DB ??
+  configured(process.env.PULSE_DB) ??
   // A serverless filesystem is read-only apart from /tmp, and /tmp does not
   // survive or get shared between instances. Defaulting to memory there means
   // the deployment needs no configuration — at the cost of losing everything on

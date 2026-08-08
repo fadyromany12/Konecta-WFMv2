@@ -90,6 +90,24 @@ export function shiftSpan(shift: ScheduleShift): { startAt: Stamp; endAt: Stamp;
   return { startAt, endAt: resolved.endAt, minutes: diffMinutes(startAt, resolved.endAt) };
 }
 
+/**
+ * The same shift, `days` later — what dragging it across the week means.
+ *
+ * Every stamp moves by the same whole number of days, which is the only way an
+ * overnight shift survives the move: shifting the start alone would collapse a
+ * 22:00–06:00 onto a single date, and re-deriving the dates from the times
+ * would be right for a day shift and wrong for that one. Clock times are never
+ * touched, so the advisor works the hours they were told they would.
+ */
+export function shiftByDays(shift: ScheduleShift, days: number): ScheduleShift {
+  const move = (s: Stamp): Stamp => `${addDays(dateOf(s), days)} ${timeOf(s)}` as Stamp;
+  return {
+    ...shift,
+    endAt: move(shift.endAt),
+    rows: shift.rows.map((row) => ({ ...row, startAt: move(row.startAt) })),
+  };
+}
+
 export function validateSchedule(shifts: ScheduleShift[], payrollDate: DateStr): Issue[] {
   const issues: Issue[] = [];
 
