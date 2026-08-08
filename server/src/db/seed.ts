@@ -11,7 +11,7 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { db, transact } from './index.js';
+import { db, ensureSchema, transact } from './index.js';
 import { ACTIVITIES } from '../domain/reference.js';
 import type { ScheduleActivityKey } from '../domain/reference.js';
 import type { ScheduleShift } from '../domain/schedule.js';
@@ -672,9 +672,19 @@ function shiftTime(time: string, deltaMinutes: number): string {
 }
 
 // Run directly (`npm run seed`) rather than when imported by the server.
+//
+// Wrapped in an async function rather than using top-level await: this module
+// is bundled into a CommonJS serverless function, and CJS has no top-level
+// await at all — the build fails outright rather than degrading.
 if (process.argv[1] && /seed\.(ts|js)$/.test(process.argv[1])) {
-  const { ensureSchema } = await import('./index.js');
-  await ensureSchema();
-  await seed({ force: process.argv.includes('--force') });
-  await db.close();
+  void (async () => {
+    try {
+      await ensureSchema();
+      await seed({ force: process.argv.includes('--force') });
+      await db.close();
+    } catch (err) {
+      console.error('Seeding failed:', err);
+      process.exit(1);
+    }
+  })();
 }
