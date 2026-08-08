@@ -11,7 +11,7 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { db, ensureSchema, transact } from './index.js';
+import { audit, db, ensureSchema, transact } from './index.js';
 import { ACTIVITIES } from '../domain/reference.js';
 import type { ScheduleActivityKey } from '../domain/reference.js';
 import type { ScheduleShift } from '../domain/schedule.js';
@@ -276,16 +276,33 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
   // -------------------------------------------------------- shift rule change
   const RULE_SQL =
     'INSERT INTO shift_rule_changes (user_id, shift_rule, effective_date, created_by) VALUES (?, ?, ?, ?)';
-  await db.run(RULE_SQL, [nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId]);
+  // Audited as well as stored, exactly as the route does it. Writing straight
+  // to the table skipped the audit and left the Rules Log empty on a fresh
+  // install — a screen whose whole job is showing a history opening on nothing
+  // teaches people it is broken.
+  const ruleChange = async (userId: number, rule: string, effective: string, actorId: number) => {
+    await db.run(RULE_SQL, [userId, rule, effective, actorId]);
+    const who = await db.get<{ name: string }>('SELECT name FROM users WHERE id = ?', [userId]);
+    await audit(actorId, 'shift_rule', userId, 'CHANGE', {
+      shiftRule: rule,
+      effectiveDate: effective,
+      subject: who?.name ?? `#${userId}`,
+    });
+  };
+  await ruleChange(nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId);
   // One already in force and one pending, so the history reads as a history.
-  await db.run(RULE_SQL, [dayAdvisors[0], 'CR2', addDays(today, -30), tlDayId]);
-  await db.run(RULE_SQL, [dayAdvisors[0], 'CR3', addDays(today, 21), tlDayId]);
+  await ruleChange(dayAdvisors[0], 'CR2', addDays(today, -30), tlDayId);
+  await ruleChange(dayAdvisors[0], 'CR3', addDays(today, 21), tlDayId);
 
   const FROM = -14;
   // Schedules are published two days ahead; the forecast runs a week out. The
   // gap between them is deliberate — it is what the planner fills, and what
   // gives auto-scheduling something to actually do.
-  const TO = 2;
+  // Far enough forward to carry a whole unpublished week. The next week being
+  // a draft is the state the publish flow exists for, and a seed that only
+  // ever shows published days would hide the feature entirely.
+  const TO = 9;
+  const DRAFT_FROM = 3;
 
   for (let offset = FROM; offset <= TO; offset++) {
     const date = addDays(today, offset);
@@ -332,7 +349,14 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
         endAt: stamp(date, isNewHire ? '17:00' : endTime),
       };
 
-      await saveShifts({ userId, date, shifts: [shift], actorId: adminId, source: 'IEX' });
+      await saveShifts({
+        userId,
+        date,
+        shifts: [shift],
+        actorId: adminId,
+        source: 'IEX',
+        status: offset >= DRAFT_FROM ? 'DRAFT' : 'PUBLISHED',
+      });
 
       if (offset > 0) continue; // nothing has been punched in the future
 
@@ -533,6 +557,13 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
     'INSERT INTO forecast_settings (project_id, service_goal, target_seconds, shrinkage) VALUES (?, ?, ?, ?)',
     ['A123', 0.8, 20, 0.3],
   );
+  // The settings that every requirement is computed from, on the record with
+  // everything else that changed the rules.
+  await audit(omId, 'forecast', 'A123', 'SETTINGS', {
+    serviceGoal: 0.8,
+    targetSeconds: 20,
+    shrinkage: 0.3,
+  });
 
   // A believable arrival curve: quiet overnight, a morning peak, a dip over
   // lunch, a second afternoon peak, tailing away through the evening.

@@ -19,6 +19,7 @@ import {
   nowStamp,
   resolveAfter,
   timeOf,
+  todayStr,
   toMinutes,
   type DateStr,
   type Stamp,
@@ -32,11 +33,31 @@ interface ScheduleRecord {
   shift_no: number;
   end_at: string;
   source: string;
+  status: 'DRAFT' | 'PUBLISHED';
 }
 
-export async function getShifts(userId: number, date: DateStr): Promise<ScheduleShift[]> {
+/**
+ * Whether a read should see work that has not been published.
+ *
+ * The default is no, deliberately. Every consequential read — what an advisor
+ * is shown, whether the clock will open, what adherence measures them against
+ * — must see only what they were actually told, and a caller that forgets to
+ * pass anything gets that. The planning screens opt in, because seeing the
+ * cover a draft would produce is the entire reason for drafting it.
+ */
+export interface ShiftQuery {
+  includeDrafts?: boolean;
+}
+
+const draftClause = (q?: ShiftQuery) => (q?.includeDrafts ? '' : " AND status = 'PUBLISHED'");
+
+export async function getShifts(
+  userId: number,
+  date: DateStr,
+  query?: ShiftQuery,
+): Promise<ScheduleShift[]> {
   const records = await db.all<ScheduleRecord>(
-    'SELECT * FROM schedules WHERE user_id = ? AND payroll_date = ? ORDER BY shift_no',
+    `SELECT * FROM schedules WHERE user_id = ? AND payroll_date = ?${draftClause(query)} ORDER BY shift_no`,
     [userId, date],
   );
   if (records.length === 0) return [];
@@ -53,6 +74,7 @@ export async function getShifts(userId: number, date: DateStr): Promise<Schedule
   return records.map((record) => ({
     shiftNo: record.shift_no,
     endAt: record.end_at,
+    status: record.status,
     rows: rows
       .filter((r) => r.schedule_id === record.id)
       .map((r) => ({
@@ -75,6 +97,7 @@ export async function getShifts(userId: number, date: DateStr): Promise<Schedule
 export async function getShiftsFor(
   userIds: number[],
   dates: DateStr[],
+  query?: ShiftQuery,
 ): Promise<Map<string, ScheduleShift[]>> {
   const out = new Map<string, ScheduleShift[]>();
   if (userIds.length === 0 || dates.length === 0) return out;
@@ -82,7 +105,7 @@ export async function getShiftsFor(
   const records = await db.all<ScheduleRecord>(
     `SELECT * FROM schedules
      WHERE user_id IN (${placeholders(userIds.length)})
-       AND payroll_date IN (${placeholders(dates.length)})
+       AND payroll_date IN (${placeholders(dates.length)})${draftClause(query)}
      ORDER BY user_id, payroll_date, shift_no`,
     [...userIds, ...dates],
   );
@@ -106,6 +129,7 @@ export async function getShiftsFor(
     const shift: ScheduleShift = {
       shiftNo: record.shift_no,
       endAt: record.end_at,
+      status: record.status,
       rows: (rowsBySchedule.get(record.id) ?? []).map((r) => ({
         id: r.id,
         startAt: r.start_at,
@@ -119,14 +143,21 @@ export async function getShiftsFor(
   return out;
 }
 
-export async function getShiftsInRange(userId: number, start: DateStr, end: DateStr) {
+export async function getShiftsInRange(
+  userId: number,
+  start: DateStr,
+  end: DateStr,
+  query?: ShiftQuery,
+) {
   const rows = await db.all<{ payroll_date: string }>(
-    'SELECT DISTINCT payroll_date FROM schedules WHERE user_id = ? AND payroll_date BETWEEN ? AND ? ORDER BY payroll_date',
+    `SELECT DISTINCT payroll_date FROM schedules
+     WHERE user_id = ? AND payroll_date BETWEEN ? AND ?${draftClause(query)}
+     ORDER BY payroll_date`,
     [userId, start, end],
   );
   const days = [];
   for (const { payroll_date: date } of rows) {
-    days.push({ date, shifts: await getShifts(userId, date) });
+    days.push({ date, shifts: await getShifts(userId, date, query) });
   }
   return days;
 }
@@ -153,28 +184,40 @@ export async function teamWeek(params: {
   userIds: number[];
   start: DateStr;
   end: DateStr;
-}): Promise<{ start: DateStr; end: DateStr; dates: DateStr[]; people: TeamWeekPerson[] }> {
+}): Promise<{
+  start: DateStr;
+  end: DateStr;
+  dates: DateStr[];
+  people: TeamWeekPerson[];
+  /** Unpublished person-days in the range, for the publish button. */
+  drafts: number;
+}> {
   const { userIds, start, end } = params;
   const dates: DateStr[] = [];
   for (let d = start; d <= end; d = addDays(d, 1)) dates.push(d);
 
-  if (userIds.length === 0) return { start, end, dates, people: [] };
+  if (userIds.length === 0) return { start, end, dates, people: [], drafts: 0 };
 
   const users = await db.all<{ id: number; employee_id: string; name: string; role: string }>(
     `SELECT id, employee_id, name, role FROM users
      WHERE id IN (${placeholders(userIds.length)}) ORDER BY name`,
     userIds,
   );
+  // Drafts included: this is the screen they are built on, and a planner who
+  // cannot see their own unpublished work would be planning blind.
   const shiftsByKey = await getShiftsFor(
     users.map((u) => u.id),
     dates,
+    { includeDrafts: true },
   );
 
+  let drafts = 0;
   const people = users.map((user) => {
     let minutes = 0;
     const days = dates.map((date) => {
       const shifts = shiftsByKey.get(`${user.id}|${date}`) ?? [];
       for (const shift of shifts) minutes += shiftSpan(shift).minutes;
+      if (shifts.some((s) => s.status === 'DRAFT')) drafts++;
       return { date, shifts };
     });
     return {
@@ -187,7 +230,91 @@ export async function teamWeek(params: {
     };
   });
 
-  return { start, end, dates, people };
+  return { start, end, dates, people, drafts };
+}
+
+export interface PublishResult {
+  published: number;
+  /** Who to tell, and which days changed for each of them. */
+  affected: { userId: number; dates: DateStr[] }[];
+}
+
+/**
+ * Publish drafted days — the moment a plan becomes a promise.
+ *
+ * Idempotent by construction: only rows still in DRAFT are touched, so
+ * pressing the button twice does not re-notify a team about a week they were
+ * told about this morning. `published_at` is stamped once and never moved by a
+ * later edit, because the question it answers is "when was I told", not "when
+ * was this last touched".
+ */
+export async function publishSchedules(params: {
+  userIds: number[];
+  start: DateStr;
+  end: DateStr;
+  actorId: number;
+}): Promise<PublishResult> {
+  const { userIds, start, end, actorId } = params;
+  if (userIds.length === 0) return { published: 0, affected: [] };
+
+  return transact(async () => {
+    const drafts = await db.all<{ user_id: number; payroll_date: string }>(
+      `SELECT DISTINCT user_id, payroll_date FROM schedules
+       WHERE user_id IN (${placeholders(userIds.length)})
+         AND payroll_date BETWEEN ? AND ?
+         AND status = 'DRAFT'
+       ORDER BY user_id, payroll_date`,
+      [...userIds, start, end],
+    );
+    if (drafts.length === 0) return { published: 0, affected: [] };
+
+    await db.run(
+      `UPDATE schedules SET status = 'PUBLISHED', published_at = ?
+       WHERE user_id IN (${placeholders(userIds.length)})
+         AND payroll_date BETWEEN ? AND ?
+         AND status = 'DRAFT'`,
+      [nowStamp(), ...userIds, start, end],
+    );
+
+    const byUser = new Map<number, DateStr[]>();
+    for (const row of drafts) {
+      const list = byUser.get(row.user_id);
+      if (list) list.push(row.payroll_date as DateStr);
+      else byUser.set(row.user_id, [row.payroll_date as DateStr]);
+    }
+
+    // Once for the range, and once per person. The range row is the management
+    // record; the per-person rows are what let somebody later answer "when was
+    // I told about that Saturday", which is the question that actually gets
+    // asked and the one a range row cannot answer.
+    await audit(actorId, 'schedule', `${start}:${end}`, 'PUBLISH', {
+      days: drafts.length,
+      people: byUser.size,
+    });
+    for (const [userId, dates] of byUser) {
+      for (const date of dates) {
+        await audit(actorId, 'schedule', `${userId}:${date}`, 'PUBLISH', { date });
+      }
+    }
+
+    return {
+      published: drafts.length,
+      affected: [...byUser].map(([userId, dates]) => ({ userId, dates })),
+    };
+  });
+}
+
+/** How much of a range is still unpublished, for the button that publishes it. */
+export async function draftCount(userIds: number[], start: DateStr, end: DateStr): Promise<number> {
+  if (userIds.length === 0) return 0;
+  const row = await db.get<{ n: number }>(
+    `SELECT COUNT(DISTINCT user_id || '|' || payroll_date) AS n FROM schedules
+     WHERE user_id IN (${placeholders(userIds.length)})
+       AND payroll_date BETWEEN ? AND ?
+       AND status = 'DRAFT'`,
+    [...userIds, start, end],
+  );
+  return Number(row?.n ?? 0);
 }
 
 /**
@@ -223,12 +350,12 @@ export async function moveShift(params: {
   const deltaDays = diffDays(fromDate, toDate);
 
   return transact(async () => {
-    const source = await getShifts(userId, fromDate);
+    const source = await getShifts(userId, fromDate, { includeDrafts: true });
     const moving = source.find((s) => s.shiftNo === shiftNo);
     if (!moving) return { ok: false, message: 'That shift is no longer there — reload and try again.' };
 
     const shifted = shiftByDays(moving, deltaDays);
-    const target = await getShifts(userId, toDate);
+    const target = await getShifts(userId, toDate, { includeDrafts: true });
 
     // Sorted by start, not appended. `saveShifts` renumbers by array order and
     // the validator requires shift 1 to finish before shift 2 begins, so an
@@ -243,6 +370,14 @@ export async function moveShift(params: {
       date: toDate,
       shifts: destinationShifts,
       actorId,
+      // A published shift stays published when it moves — the advisor is told,
+      // and retracting it into a draft would take the day off their week with
+      // nothing to replace it. Landing on a day that already has published
+      // shifts publishes it too, for the same reason.
+      status:
+        moving.status === 'PUBLISHED' || target.some((s) => s.status === 'PUBLISHED')
+          ? 'PUBLISHED'
+          : 'DRAFT',
     });
     if (!destination.ok) {
       return {
@@ -257,6 +392,7 @@ export async function moveShift(params: {
       date: fromDate,
       shifts: source.filter((s) => s.shiftNo !== shiftNo),
       actorId,
+      status: source.find((s) => s.shiftNo !== shiftNo)?.status ?? 'PUBLISHED',
     });
     return { ok: true };
   });
@@ -274,6 +410,17 @@ export async function saveShifts(params: {
   shifts: ScheduleShift[];
   actorId: number;
   source?: string;
+  /**
+   * Force the day's published state. Left unset — which is every ordinary edit
+   * — the day keeps whatever it already was, and a day that did not exist
+   * starts as a draft.
+   *
+   * Preserving rather than resetting is the whole subtlety. Editing a published
+   * Tuesday must not silently retract it from the advisor who has already
+   * arranged their week around it, and adding a shift to an empty Saturday must
+   * not publish it before anybody has looked.
+   */
+  status?: 'DRAFT' | 'PUBLISHED';
 }): Promise<SaveResult> {
   const { userId, date, actorId, source = 'PULSE' } = params;
 
@@ -291,11 +438,23 @@ export async function saveShifts(params: {
   }
 
   await transact(async () => {
+    const existing = await db.get<{ status: string; published_at: string | null }>(
+      'SELECT status, published_at FROM schedules WHERE user_id = ? AND payroll_date = ? ORDER BY shift_no',
+      [userId, date],
+    );
+    // Only a day that has not started can be a draft. A day already underway
+    // is either real or it is not, and a drafted past day would be invisible to
+    // the timecard engine and to payroll — a silent hole rather than a plan.
+    const fresh: 'DRAFT' | 'PUBLISHED' = date > todayStr() ? 'DRAFT' : 'PUBLISHED';
+    const status = params.status ?? (existing?.status as 'DRAFT' | 'PUBLISHED' | undefined) ?? fresh;
+    const publishedAt = status === 'PUBLISHED' ? (existing?.published_at ?? nowStamp()) : null;
+
     await db.run('DELETE FROM schedules WHERE user_id = ? AND payroll_date = ?', [userId, date]);
     for (const shift of shifts) {
       const scheduleId = await db.insert(
-        'INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, source, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [userId, date, shift.shiftNo, shift.endAt, source, nowStamp()],
+        `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, source, updated_at, status, published_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, date, shift.shiftNo, shift.endAt, source, nowStamp(), status, publishedAt],
       );
       for (const [i, row] of shift.rows.entries()) {
         await db.run(
@@ -305,11 +464,12 @@ export async function saveShifts(params: {
       }
     }
     await audit(actorId, 'schedule', `${userId}:${date}`, 'SAVE', {
+      status,
       shifts: shifts.map((s) => ({ shiftNo: s.shiftNo, rows: s.rows.length, endAt: s.endAt })),
     });
   });
 
-  return { ok: true, issues, shifts: await getShifts(userId, date) };
+  return { ok: true, issues, shifts: await getShifts(userId, date, { includeDrafts: true }) };
 }
 
 /**

@@ -18,6 +18,14 @@ interface Day {
   shifts: ScheduleShift[];
 }
 
+interface HistoryEntry {
+  at: string;
+  actor: string | null;
+  date: string | null;
+  what: string;
+  kind: 'schedule' | 'timecard' | 'approval';
+}
+
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function weekdayOf(date: string): string {
@@ -49,6 +57,17 @@ export function MyWeek() {
   );
 
   const dates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(start, i)), [start]);
+
+  // Deliberately not scoped to the week on screen. "What has been done to my
+  // record lately" is one question; flicking between weeks to find the change
+  // you half-remember is not an answer to it.
+  const history = useAsync(
+    () =>
+      user
+        ? api.get<{ entries: HistoryEntry[] }>(`/history/${user.id}`)
+        : Promise.resolve({ entries: [] }),
+    [user, start],
+  );
 
   const totalMinutes = useMemo(() => {
     let minutes = 0;
@@ -123,9 +142,29 @@ export function MyWeek() {
       </div>
 
       <p className="muted">
-        This is the published schedule. If a swap or extra hours are approved, they appear here — that is what
-        lets you clock on for them.
+        This is the published schedule. A day your team leader is still working on does not appear here, and you
+        are never expected to work a shift you have not been shown. If a swap or extra hours are approved, they
+        appear here — that is what lets you clock on for them.
       </p>
+
+      <Card
+        title="What changed"
+        subtitle="Everything done to your schedule and your timecards, and who did it."
+      >
+        {history.loading && !history.data && <SkeletonTable rows={4} columns={3} />}
+        {(history.data?.entries.length ?? 0) === 0 && !history.loading && (
+          <Empty>Nothing has been changed on your record.</Empty>
+        )}
+        <ul className="history">
+          {(history.data?.entries ?? []).map((entry, i) => (
+            <li key={i} className={`history-${entry.kind}`} style={{ ['--i' as string]: i }}>
+              <span className="muted mono history-when">{entry.at.slice(0, 16)}</span>
+              <span>{entry.what}</span>
+              <span className="muted history-who">{entry.actor ?? 'the system'}</span>
+            </li>
+          ))}
+        </ul>
+      </Card>
     </>
   );
 }

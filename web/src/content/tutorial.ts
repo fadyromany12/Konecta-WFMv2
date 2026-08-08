@@ -26,11 +26,11 @@ import type { Role } from './guide';
  * is offered the new one; anyone mid-tour is restarted rather than resumed into
  * steps that may no longer line up.
  */
-export const TUTORIAL_VERSION = 4;
+export const TUTORIAL_VERSION = 5;
 
 /** Shown when a returning user is re-offered the tour. Keep it to one line. */
 export const WHATS_NEW =
-  'Updated for Team Week, live updates, the ⌘K palette and bulk approval.';
+  'Updated for draft schedules, your own change history, and multi-skill staffing.';
 
 export interface TourStep {
   /**
@@ -151,7 +151,24 @@ const TEAM_WEEK: TourStep[] = [
     target: '.team-week',
     placement: 'top',
     title: 'The whole team, the whole week',
-    body: 'Headcount sits under each date, so a thin Friday shows itself. Drag a shift to move the day; click it to open that day in the editor.',
+    body: 'Headcount and the requirement sit under each date, so a thin Friday shows itself. Drag a shift to move the day; click it to open that day in the editor.',
+  },
+  {
+    route: '/scheduling/week',
+    target: '.btn-primary',
+    placement: 'bottom',
+    title: 'A week is a draft until you publish it',
+    body: 'Dashed shifts are yours alone — nobody is expected to work a shift they have not been shown, and the clock will not open on one. Publishing tells each person their own days.',
+  },
+];
+
+const MY_HISTORY: TourStep[] = [
+  {
+    route: '/my',
+    target: '.history',
+    placement: 'top',
+    title: 'What has been done to your record',
+    body: 'Every change to your schedule and your timecards, with who made it and when. Check here before asking whether something moved.',
   },
 ];
 
@@ -189,7 +206,7 @@ const GUIDE: TourStep[] = [
  * finish, rather than a complete tour they will skip at step two.
  */
 export const TOURS: Record<Role, TourStep[]> = {
-  ADVISOR: [...CLOCK, ...SELF_SERVICE, ...REPORT, ...BELL, ...GUIDE],
+  ADVISOR: [...CLOCK, ...MY_HISTORY, ...SELF_SERVICE, ...REPORT, ...BELL, ...GUIDE],
   TEAM_LEADER: [...LIVE_BOARD, ...PULSE_LINE, ...TEAM_WEEK, ...APPROVALS, ...BELL, ...PALETTE, ...GUIDE],
   TRAINER: [...LIVE_BOARD, ...APPROVALS, ...REPORT, ...PALETTE, ...GUIDE],
   OPS_MANAGER: [...LIVE_BOARD, ...TEAM_WEEK, ...PLANNING, ...ANALYTICS, ...APPROVALS, ...PALETTE, ...GUIDE],

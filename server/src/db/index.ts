@@ -86,6 +86,9 @@ export function ensureSchema(): Promise<void> {
  */
 async function migrate(): Promise<void> {
   await addColumn('timecards', 'correction_reason', 'TEXT');
+  // Existing rows were being worked to, so they are published by definition.
+  await addColumn('schedules', 'status', "TEXT NOT NULL DEFAULT 'PUBLISHED'");
+  await addColumn('schedules', 'published_at', 'TEXT');
 }
 
 async function addColumn(table: string, column: string, type: string): Promise<void> {

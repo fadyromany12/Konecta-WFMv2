@@ -39,6 +39,12 @@ export interface ScheduleShift {
   rows: ScheduleRow[];
   /** End-of-shift marker: the end of the final row. */
   endAt: Stamp;
+  /**
+   * Whether the advisor has been told about this yet. Absent on shifts built
+   * in memory — validation and the rules below do not care, because a draft
+   * has to be a legal schedule before it can be published.
+   */
+  status?: 'DRAFT' | 'PUBLISHED';
 }
 
 export interface ScheduleSegment {

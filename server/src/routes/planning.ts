@@ -9,6 +9,7 @@ import { db } from '../db/index.js';
 import { authenticate, requireSupervisor } from '../middleware/auth.js';
 import { asyncRoute, HttpError } from '../middleware/errors.js';
 import { intervalsOfDay, requiredStaffing } from '../domain/forecast.js';
+import { planMultiSkill } from '../domain/multiSkill.js';
 import { addDays, todayStr } from '../domain/time.js';
 import { canManage, placeholders, resolveGroup, visibleUserIds } from '../services/people.js';
 import {
@@ -147,6 +148,67 @@ planning.get('/forecast/staffing', authenticate, requireSupervisor, (req, res) =
     .parse(req.query);
   res.json(requiredStaffing(query));
 });
+
+/**
+ * Size a roster where advisors are not interchangeable.
+ *
+ * Kept as its own endpoint rather than folded into `/forecast`. It runs a
+ * simulation per candidate headcount, which is milliseconds rather than
+ * microseconds, and putting that behind every coverage read would make the
+ * whole planning screen slower to answer a question most days do not ask.
+ */
+planning.post(
+  '/forecast/multi-skill',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        skills: z
+          .array(
+            z.object({
+              key: z.string().min(1).max(40),
+              volume: z.number().min(0).max(100000),
+              ahtSeconds: z.number().min(1).max(7200),
+            }),
+          )
+          .min(1, 'Describe at least one skill.')
+          .max(12, 'Twelve skills is already more than a simulation of a half hour can say much about.'),
+        pools: z
+          .array(
+            z.object({
+              key: z.string().min(1).max(40),
+              skills: z.array(z.string()).min(1, 'A pool that serves no skill is not a pool.'),
+            }),
+          )
+          .min(1)
+          .max(12),
+        serviceGoal: z.number().min(0.5).max(0.99).default(0.8),
+        targetSeconds: z.number().min(1).max(600).default(20),
+        shrinkage: z.number().min(0).max(0.9).default(0.3),
+      })
+      .parse(req.body);
+
+    const known = new Set(body.skills.map((s) => s.key));
+    for (const pool of body.pools) {
+      const unknown = pool.skills.filter((k) => !known.has(k));
+      if (unknown.length > 0) {
+        throw new HttpError(400, `${pool.key} is trained on ${unknown.join(', ')}, which is not a skill you listed.`);
+      }
+    }
+    const uncovered = body.skills
+      .filter((s) => s.volume > 0 && !body.pools.some((p) => p.skills.includes(s.key)))
+      .map((s) => s.key);
+    if (uncovered.length > 0) {
+      throw new HttpError(
+        400,
+        `Nobody is trained on ${uncovered.join(', ')}. Add a pool that serves ${uncovered.length === 1 ? 'it' : 'them'}, or set the volume to zero.`,
+      );
+    }
+
+    res.json(planMultiSkill(body));
+  }),
+);
 
 planning.post(
   '/forecast/auto-schedule',

@@ -20,7 +20,7 @@ import { INTERVAL_MINUTES } from '../domain/forecast.js';
 import { addDays, diffMinutes, nowStamp, todayStr, type DateStr, type Stamp } from '../domain/time.js';
 import { placeholders } from './people.js';
 import { alertAcks } from './planning.js';
-import { getShiftsFor } from './scheduling.js';
+import { getShiftsFor, type ShiftQuery } from './scheduling.js';
 
 /**
  * Past this much of a shift with no punch at all, the board stops calling it
@@ -340,12 +340,16 @@ function sameFamily(scheduled: string, actual: string | null): boolean {
  * Headcount scheduled to be on the phone in each half hour, which is what the
  * forecast's required figure gets compared against.
  */
-export async function scheduledByInterval(userIds: number[], date: DateStr): Promise<Map<string, number>> {
+export async function scheduledByInterval(
+  userIds: number[],
+  date: DateStr,
+  query?: ShiftQuery,
+): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (userIds.length === 0) return counts;
 
   const previous = addDays(date, -1);
-  const shiftsByKey = await getShiftsFor(userIds, [previous, date]);
+  const shiftsByKey = await getShiftsFor(userIds, [previous, date], query);
 
   for (const userId of userIds) {
     // A shift starting the previous evening still covers this morning.

@@ -307,3 +307,77 @@ export async function payrollExport(params: {
 
   return [...totals.values()];
 }
+
+export interface DayCover {
+  date: DateStr;
+  /** The day's largest requirement, for a sense of scale. */
+  peakRequired: number;
+  /** The half hour that is worst covered. */
+  worstAt: string | null;
+  /** Requirement and cover at that half hour — the two only mean anything together. */
+  requiredAtWorst: number;
+  scheduledAtWorst: number;
+  /** Most negative variance anywhere in the day. */
+  worstVariance: number;
+  /** How many half hours are short. */
+  shortIntervals: number;
+  /** How many half hours have any demand at all, so the count above has a denominator. */
+  demandIntervals: number;
+  /** Whether the day has a forecast at all. */
+  forecast: boolean;
+}
+
+/**
+ * A day of cover reduced to the few numbers a scheduling grid can hold.
+ *
+ * The coverage chart is the right tool for one day and useless as a column
+ * heading. What survives compression is: how big the day is, where it is worst,
+ * and how much of it is short — so that dragging a shift off Thursday shows
+ * Thursday going short instead of discovering it a fortnight later.
+ *
+ * Read at the *worst* interval rather than the busiest one. The first version
+ * reported cover at the peak requirement, which sounds equivalent and is not:
+ * requirements tie constantly across a day, so "the peak" was whichever tied
+ * interval came first, and two days with identical rosters reported 0 of 6 and
+ * 4 of 6. The worst interval is unambiguous, and it is also the one a planner
+ * is going to have to do something about.
+ */
+export async function weekCover(params: {
+  projectId: string;
+  userIds: number[];
+  dates: DateStr[];
+}): Promise<DayCover[]> {
+  const { projectId, userIds, dates } = params;
+
+  return Promise.all(
+    dates.map(async (date) => {
+      const { coverage } = await coverageFor({ projectId, date, userIds });
+      const withDemand = coverage.filter((c) => c.requiredAgents > 0);
+      if (withDemand.length === 0) {
+        return {
+          date,
+          peakRequired: 0,
+          worstAt: null,
+          requiredAtWorst: 0,
+          scheduledAtWorst: 0,
+          worstVariance: 0,
+          shortIntervals: 0,
+          demandIntervals: 0,
+          forecast: false,
+        };
+      }
+      const worst = withDemand.reduce((a, b) => (b.variance < a.variance ? b : a));
+      return {
+        date,
+        peakRequired: Math.max(...withDemand.map((c) => c.requiredAgents)),
+        worstAt: worst.startTime,
+        requiredAtWorst: worst.requiredAgents,
+        scheduledAtWorst: worst.scheduledAgents,
+        worstVariance: worst.variance,
+        shortIntervals: withDemand.filter((c) => c.variance < 0).length,
+        demandIntervals: withDemand.length,
+        forecast: true,
+      };
+    }),
+  );
+}

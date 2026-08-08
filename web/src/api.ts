@@ -153,6 +153,8 @@ export interface ScheduleShift {
   shiftNo: number;
   rows: ScheduleRow[];
   endAt: string;
+  /** Absent on shifts being edited client-side, which have no stored state yet. */
+  status?: 'DRAFT' | 'PUBLISHED';
 }
 
 export interface Catalog {

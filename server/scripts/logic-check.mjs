@@ -149,6 +149,49 @@ const unge = await call('POST','/schedules/group-exception/remove',TL,{date:day(
 check('group exception can be removed', (unge.body?.removed?.length ?? 0) === (ge.body?.applied?.length ?? -1),
   `applied ${ge.body?.applied?.length} removed ${unge.body?.removed?.length}`);
 
+console.log('=== DRAFT AND PUBLISH ===');
+// The seed drafts the week after next. Find it.
+const draftWeek = await call('GET',`/schedules/team?start=${day(3)}&end=${day(9)}`,TL);
+check('drafts are reported to the planner', (draftWeek.body?.drafts ?? 0) > 0, `drafts ${draftWeek.body?.drafts}`);
+const draftDay = (draftWeek.body?.people ?? [])
+  .flatMap((p) => p.days.map((d) => ({ userId: p.userId, ...d })))
+  .find((d) => d.shifts.some((s) => s.status === 'DRAFT'));
+check('a drafted shift carries its state', !!draftDay, JSON.stringify(draftDay?.shifts?.[0]?.status));
+
+if (draftDay) {
+  const theirEmail = (await call('GET',`/people/${draftDay.userId}`,TL)).body?.person?.email;
+  const theirToken = await tok(theirEmail);
+
+  const own = (await call('GET',`/schedules/${draftDay.userId}?start=${draftDay.date}&end=${draftDay.date}`,TL)).body;
+  check('the planner sees the draft', (own.days[0]?.shifts.length ?? 0) > 0);
+
+  // The advisor must not see it, even asking about themselves.
+  const asThem = await call('GET',
+    `/schedules/${draftDay.userId}?start=${draftDay.date}&end=${draftDay.date}`, theirToken);
+  check('the advisor does not see their own draft',
+    (asThem.body?.days?.length ?? 0) === 0, JSON.stringify(asThem.body).slice(0,120));
+
+  // Publishing is supervisor-only, idempotent, and tells people.
+  check('advisors cannot publish',
+    (await call('POST','/schedules/publish',ADV,{start:day(3),end:day(9)})).status === 403);
+  check('publish refuses a backwards range',
+    (await call('POST','/schedules/publish',TL,{start:day(9),end:day(3)})).status === 400);
+
+  const pub = await call('POST','/schedules/publish',TL,{start:draftDay.date,end:draftDay.date});
+  check('publishing reports what it published', (pub.body?.published ?? 0) > 0, JSON.stringify(pub.body).slice(0,120));
+  check('publishing names who to tell', (pub.body?.affected?.length ?? 0) > 0);
+
+  const again = await call('POST','/schedules/publish',TL,{start:draftDay.date,end:draftDay.date});
+  check('publishing twice does not re-notify', again.body?.published === 0, JSON.stringify(again.body));
+
+  const nowVisible = await call('GET',
+    `/schedules/${draftDay.userId}?start=${draftDay.date}&end=${draftDay.date}`, theirToken);
+  check('the advisor sees it once published', (nowVisible.body?.days?.length ?? 0) > 0);
+} else check('no draft to publish (skipped)', true);
+
+check('a day already worked is never a draft',
+  ((await call('GET',`/schedules/team?start=${day(-3)}&end=${day(-1)}`,TL)).body?.drafts ?? -1) === 0);
+
 console.log('=== TEAM WEEK ===');
 const tw = await call('GET',`/schedules/team?start=${day(0)}&end=${day(6)}`,TL);
 check('team week returns seven days', tw.body?.dates?.length === 7, JSON.stringify(tw.body?.dates));
@@ -156,6 +199,15 @@ check('team week returns people', (tw.body?.people?.length ?? 0) > 0);
 check('every person has a cell per date',
   (tw.body?.people ?? []).every((p) => p.days.length === 7));
 check('team week is supervisor only', (await call('GET',`/schedules/team?start=${day(0)}&end=${day(6)}`,ADV)).status === 403);
+check('team week carries cover per date',
+  Array.isArray(tw.body?.cover) && tw.body.cover.length === 7, `${tw.body?.cover?.length} cover entries`);
+check('cover is read at the worst interval, not a tied peak',
+  (tw.body?.cover ?? []).every((c) => !c.forecast || (c.worstVariance === c.scheduledAtWorst - c.requiredAtWorst)),
+  JSON.stringify((tw.body?.cover ?? [])[0]));
+check('short intervals never exceed intervals with demand',
+  (tw.body?.cover ?? []).every((c) => c.shortIntervals <= c.demandIntervals));
+check('a day with no forecast says so rather than reporting zero cover',
+  (tw.body?.cover ?? []).every((c) => c.forecast || (c.shortIntervals === 0 && c.worstAt === null)));
 check('team week refuses a backwards range', (await call('GET',`/schedules/team?start=${day(6)}&end=${day(0)}`,TL)).status === 400);
 check('team week refuses a huge range', (await call('GET',`/schedules/team?start=${day(0)}&end=${day(200)}`,TL)).status === 400);
 
@@ -289,6 +341,71 @@ const offers = (await call('GET','/extra-hours',ADV)).body.offers;
 const closed = offers.find((o) => o.status !== 'OPEN');
 if (closed) check('cannot bid on a closed offer', (await call('POST',`/extra-hours/${closed.id}/bid`,ADV)).body?.ok === false);
 else check('no closed offer to test (skipped)', true);
+
+console.log('=== PERSONAL HISTORY ===');
+const hist = await call('GET',`/history/${target.id}`,TL);
+check('history returns entries', Array.isArray(hist.body?.entries), JSON.stringify(hist.body).slice(0,100));
+check('every entry says what happened',
+  (hist.body?.entries ?? []).every((e) => typeof e.what === 'string' && e.what.length > 0));
+check('every entry is kinded',
+  (hist.body?.entries ?? []).every((e) => ['schedule','timecard','approval'].includes(e.kind)));
+check('an advisor can read their own history', (await call('GET','/history/6',ADV)).status === 200 || (await call('GET',`/history/${(await call('GET','/auth/me',ADV)).body.user.id}`,ADV)).status === 200);
+const advId = (await call('GET','/auth/me',ADV)).body.user.id;
+check('an advisor reads their own', (await call('GET',`/history/${advId}`,ADV)).status === 200);
+const stranger = otherTeam.find((p) => p.id !== advId && !people.some((q) => q.id === p.id));
+if (stranger) {
+  check("an advisor cannot read somebody else's history",
+    (await call('GET',`/history/${stranger.id}`,ADV)).status === 403);
+} else check('no stranger to test history scoping (skipped)', true);
+
+console.log('=== RULES LOG ===');
+const rules = await call('GET','/admin/rules-log',TL);
+check('rules log returns entries', Array.isArray(rules.body?.entries));
+check('rules log is supervisor only', (await call('GET','/admin/rules-log',ADV)).status === 403);
+check('every rule change is kinded',
+  (rules.body?.entries ?? []).every((e) =>
+    ['shift-rule','forecast-settings','payroll-run','schedule-publish'].includes(e.kind)));
+check('the future-dated shift rule shows as pending',
+  (rules.body?.entries ?? []).some((e) => e.kind === 'shift-rule' && e.pending === true),
+  JSON.stringify((rules.body?.entries ?? []).filter((e)=>e.kind==='shift-rule').slice(0,2)));
+check('rules log excludes ordinary timecard edits',
+  (rules.body?.entries ?? []).every((e) => e.kind !== 'timecard'));
+
+console.log('=== MULTI-SKILL ===');
+const ms = await call('POST','/forecast/multi-skill',TL,{
+  skills:[{key:'en',volume:50,ahtSeconds:240},{key:'ar',volume:30,ahtSeconds:270}],
+  pools:[{key:'english',skills:['en']},{key:'arabic',skills:['ar']},{key:'both',skills:['en','ar']}],
+  serviceGoal:0.8,targetSeconds:20,shrinkage:0.3,
+});
+check('multi-skill returns a plan', typeof ms.body?.agentsOnPhone === 'number', JSON.stringify(ms.body).slice(0,140));
+check('multi-skill applies shrinkage',
+  ms.body?.requiredAgents === Math.ceil(ms.body?.agentsOnPhone / 0.7), `${ms.body?.agentsOnPhone} -> ${ms.body?.requiredAgents}`);
+check('multi-skill reports both Erlang bounds',
+  typeof ms.body?.pooledEquivalent === 'number' && typeof ms.body?.isolatedEquivalent === 'number');
+check('splitting the traffic costs more than pooling it',
+  ms.body?.isolatedEquivalent > ms.body?.pooledEquivalent,
+  `isolated ${ms.body?.isolatedEquivalent} pooled ${ms.body?.pooledEquivalent}`);
+check('every skill gets a verdict', (ms.body?.perSkill?.length ?? 0) === 2);
+check('multi-skill is deterministic',
+  JSON.stringify((await call('POST','/forecast/multi-skill',TL,{
+    skills:[{key:'en',volume:50,ahtSeconds:240},{key:'ar',volume:30,ahtSeconds:270}],
+    pools:[{key:'english',skills:['en']},{key:'arabic',skills:['ar']},{key:'both',skills:['en','ar']}],
+    serviceGoal:0.8,targetSeconds:20,shrinkage:0.3,
+  })).body) === JSON.stringify(ms.body));
+check('a pool trained on an unlisted skill is refused',
+  (await call('POST','/forecast/multi-skill',TL,{
+    skills:[{key:'en',volume:50,ahtSeconds:240}],
+    pools:[{key:'x',skills:['nope']}],serviceGoal:0.8,targetSeconds:20,shrinkage:0.3,
+  })).status === 400);
+check('a skill nobody can take is refused',
+  (await call('POST','/forecast/multi-skill',TL,{
+    skills:[{key:'en',volume:50,ahtSeconds:240},{key:'ar',volume:20,ahtSeconds:240}],
+    pools:[{key:'english',skills:['en']}],serviceGoal:0.8,targetSeconds:20,shrinkage:0.3,
+  })).status === 400);
+check('multi-skill is supervisor only',
+  (await call('POST','/forecast/multi-skill',ADV,{
+    skills:[{key:'en',volume:10,ahtSeconds:240}],pools:[{key:'e',skills:['en']}],
+  })).status === 403);
 
 console.log('=== NOTIFICATIONS ===');
 const notif = (await call('GET','/notifications',TL)).body;

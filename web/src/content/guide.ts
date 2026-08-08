@@ -521,7 +521,8 @@ export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> 
         },
       ],
       watchFor: [
-        'The staffing model assumes one queue. If the work is genuinely multi-skilled, treat the required headcount as optimistic.',
+        'Coverage and the requirement on Forecast & Coverage still assume one queue. Multi-Skill is where that assumption is dropped — if your work is genuinely split by language or skill, size it there and treat the single-queue figure as the floor.',
+        'Multi-Skill simulates rather than solving. It is seeded, so it gives the same answer every time, but it is an estimate and the last percentage point is not meaningful.',
       ],
     },
     ADMIN: { focus: 'You have access; ordinarily this is not your screen.' },
@@ -531,6 +532,14 @@ export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> 
     ADVISOR: {
       focus: 'Everything you can arrange about your own time without asking anybody in person.',
       steps: [
+        {
+          title: 'My Week shows what you have been told',
+          body: 'Only published days appear. A week your team leader is still building is not there yet, and you are never expected to work a shift you have not been shown.',
+        },
+        {
+          title: 'What changed is your own record',
+          body: 'Everything done to your schedule and your timecards, with who did it and when. It is the answer to "I think my Thursday moved" — check it before you ask.',
+        },
         {
           title: 'Time off is checked as you submit',
           body: 'You cannot request more than you have accrued. The balance only moves when it is approved, not when you ask.',
@@ -549,7 +558,7 @@ export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> 
       focus: 'The approvals queue: swaps your team agreed between themselves, and extra hours to award.',
       watchFor: [
         'Approving a swap exchanges the schedules immediately and re-derives both timecards. Check neither person ends up scheduled twice.',
-        'Approving leave does not check coverage for you. Look at the day before you say yes.',
+        'Your team can see what you did to their record and when, on their own My Week. That is deliberate — it is the same audit trail, turned to face the person it was done to.',
       ],
     },
     OPS_MANAGER: {
@@ -571,8 +580,15 @@ export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> 
     TRAINER: { focus: 'Mostly the roster of who is in your class and what their records say.' },
     OPS_MANAGER: {
       focus: 'Shift rules, which decide how lateness and meals are judged for everybody under them.',
+      steps: [
+        {
+          title: 'The Rules Log is what to open after a disputed run',
+          body: 'Shift rules, the staffing model, payroll runs and publications on one timeline. "What was different back then" is the first question asked, and this is the only screen that answers it in one place.',
+        },
+      ],
       watchFor: [
         'A rule change can only take effect from a future date. That is deliberate — it stops a change rewriting how time already worked was judged.',
+        'A change dated forward is logged from when it was entered, not when it starts to bite. The two are rarely the same day, and the entry date is the one that answers who decided.',
       ],
     },
     ADMIN: {
@@ -581,6 +597,10 @@ export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> 
         {
           title: 'The audit trail is the record',
           body: 'Timecards are financial documents. Every schedule edit, timecard edit and approval is attributable, and this is where you attribute it.',
+        },
+        {
+          title: 'Rules Log is the same data, filtered to what matters',
+          body: 'The audit trail answers "who touched this record". Rules Log answers "what was different back then" — a much shorter list, and the one people actually ask for.',
         },
       ],
     },

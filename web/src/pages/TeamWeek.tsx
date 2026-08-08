@@ -30,11 +30,26 @@ interface TeamWeekPerson {
   minutes: number;
 }
 
+interface DayCover {
+  date: string;
+  peakRequired: number;
+  worstAt: string | null;
+  requiredAtWorst: number;
+  scheduledAtWorst: number;
+  worstVariance: number;
+  shortIntervals: number;
+  demandIntervals: number;
+  forecast: boolean;
+}
+
 interface TeamWeekResult {
   start: string;
   end: string;
   dates: string[];
   people: TeamWeekPerson[];
+  /** Unpublished person-days in the range. */
+  drafts: number;
+  cover: DayCover[];
 }
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -65,6 +80,7 @@ export function TeamWeek() {
   const [drag, setDrag] = useState<Drag | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const end = addDays(start, 6);
 
   useEffect(() => {
@@ -83,6 +99,11 @@ export function TeamWeek() {
 
   const dates = week.data?.dates ?? [];
   const people = week.data?.people ?? [];
+  const drafts = week.data?.drafts ?? 0;
+  const cover = useMemo(
+    () => new Map((week.data?.cover ?? []).map((c) => [c.date, c])),
+    [week.data],
+  );
 
   /** Cover per day, so a thin Friday is visible without counting rows. */
   const perDay = useMemo(() => {
@@ -94,6 +115,27 @@ export function TeamWeek() {
     }
     return counts;
   }, [people]);
+
+  async function publish() {
+    setPublishing(true);
+    try {
+      const result = await api.post<{ published: number; affected: { userId: number }[] }>(
+        '/schedules/publish',
+        { group, start, end },
+      );
+      toast.success(
+        `Published ${result.published} day${result.published === 1 ? '' : 's'}.`,
+        result.affected.length === 0
+          ? 'Nothing was waiting.'
+          : `${result.affected.length} ${result.affected.length === 1 ? 'person has' : 'people have'} been told, each with their own days.`,
+      );
+      setNonce((n) => n + 1);
+    } catch (err) {
+      toast.error('Could not publish.', (err as Error).message);
+    } finally {
+      setPublishing(false);
+    }
+  }
 
   async function drop(toDate: string) {
     const source = drag;
@@ -125,12 +167,23 @@ export function TeamWeek() {
         <Button onClick={() => setStart(addDays(start, -7))}>← Previous</Button>
         <Button onClick={() => setStart(weekStart(today()))}>This week</Button>
         <Button onClick={() => setStart(addDays(start, 7))}>Next →</Button>
+        <Button variant="primary" onClick={publish} disabled={drafts === 0 || publishing}>
+          {publishing ? 'Publishing…' : drafts === 0 ? 'Nothing to publish' : `Publish ${drafts} day${drafts === 1 ? '' : 's'}`}
+        </Button>
         <div style={{ flex: 1 }} />
         <span className="muted">
           {start} to {end}
           {moving ? ' · moving…' : ''}
         </span>
       </Toolbar>
+
+      {drafts > 0 && (
+        <Banner tone="info">
+          {drafts} day{drafts === 1 ? '' : 's'} in this week {drafts === 1 ? 'is' : 'are'} still a draft. Only you
+          can see {drafts === 1 ? 'it' : 'them'} — nobody is expected to work a shift they have not been shown, and
+          the clock will not open on one.
+        </Banner>
+      )}
 
       {week.error && <Banner tone="error">{week.error}</Banner>}
       {week.loading && !week.data && <SkeletonTable rows={8} columns={8} />}
@@ -155,6 +208,7 @@ export function TeamWeek() {
                         <span>{weekdayOf(date)}</span>
                         <span className="muted mono">{date.slice(5)}</span>
                         <span className="muted">{perDay.get(date) ?? 0} on</span>
+                        <CoverLine cover={cover.get(date)} />
                       </div>
                     </th>
                   ))}
@@ -199,7 +253,7 @@ export function TeamWeek() {
                               <button
                                 key={shift.shiftNo}
                                 type="button"
-                                className="tw-shift"
+                                className={`tw-shift ${shift.status === 'DRAFT' ? 'is-draft' : ''}`}
                                 draggable={!past}
                                 onDragStart={() =>
                                   setDrag({ userId: person.userId, fromDate: day.date, shiftNo: shift.shiftNo })
@@ -211,11 +265,16 @@ export function TeamWeek() {
                                 onClick={() =>
                                   navigate(`/scheduling?userId=${person.userId}&date=${day.date}`)
                                 }
-                                title={`${person.name} · ${day.date} · open in the day editor`}
+                                title={
+                                  `${person.name} · ${day.date}` +
+                                  (shift.status === 'DRAFT' ? ' · draft, not yet visible to them' : '') +
+                                  ' · open in the day editor'
+                                }
                               >
                                 <span className="mono">
                                   {shift.rows[0]?.startAt.slice(11) ?? '??'}–{shift.endAt.slice(11)}
                                 </span>
+                                {shift.status === 'DRAFT' && <span className="tw-draft-dot" aria-label="draft" />}
                               </button>
                             ))
                           )}
@@ -241,11 +300,42 @@ export function TeamWeek() {
       )}
 
       <p className="muted">
+        A day you build is a draft until you publish it: only you can see it, and the clock will not open on a
+        shift nobody has been shown. Editing an already-published day does not retract it — the advisor sees the
+        change and is told about it, because taking a day back off somebody's week silently is worse than changing
+        it openly.
+      </p>
+
+      <p className="muted">
         Moving a shift keeps its shape — an overnight shift dragged forward is still overnight. Days that have
         already happened cannot be dragged: their timecards are already derived against the plan that was in force,
         and rewriting it after the fact would change what somebody was measured against. Correct those in the day
         editor, where the edit window applies.
       </p>
     </>
+  );
+}
+
+/**
+ * The requirement under each date.
+ *
+ * Read at the day's worst half hour, not its busiest. Requirements tie all day
+ * long, so "the peak" is whichever tied interval happens to come first — two
+ * days with the same roster reported wildly different cover before this was
+ * fixed. The worst interval is unambiguous, and it is the one somebody has to
+ * do something about.
+ */
+function CoverLine({ cover }: { cover?: DayCover }) {
+  if (!cover) return null;
+  if (!cover.forecast) return <span className="tw-cover muted">no forecast</span>;
+
+  if (cover.worstVariance >= 0) {
+    return <span className="tw-cover is-ok">covered · peak {cover.peakRequired}</span>;
+  }
+  return (
+    <span className="tw-cover is-short" title={`Worst at ${cover.worstAt}. Peak requirement ${cover.peakRequired}.`}>
+      {cover.scheduledAtWorst}/{cover.requiredAtWorst} at {cover.worstAt} · {cover.shortIntervals}/
+      {cover.demandIntervals} short
+    </span>
   );
 }

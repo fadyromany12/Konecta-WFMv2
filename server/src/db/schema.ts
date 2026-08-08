@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS schedules (
   end_at       TEXT NOT NULL,
   source       TEXT NOT NULL DEFAULT 'PULSE',
   updated_at   TEXT NOT NULL DEFAULT {{NOW}},
+  -- DRAFT or PUBLISHED. A week being built is nobody's business until whoever
+  -- is building it says so; an advisor who watches their week change three
+  -- times before Friday stops believing any of it. Defaulted to PUBLISHED so
+  -- that rows written before this column existed stay visible.
+  status       TEXT NOT NULL DEFAULT 'PUBLISHED',
+  published_at TEXT,
   UNIQUE (user_id, payroll_date, shift_no)
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_user_date ON schedules(user_id, payroll_date);

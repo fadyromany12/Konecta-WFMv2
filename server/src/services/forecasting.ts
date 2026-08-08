@@ -110,7 +110,11 @@ export async function coverageFor(params: {
   const [settings, intervals, scheduled] = await Promise.all([
     getSettings(params.projectId),
     getForecast(params.projectId, params.date),
-    scheduledByInterval(params.userIds, params.date),
+    // Drafts count towards cover here. Checking what a week would look like
+    // before committing to it is the reason for drafting one, and a coverage
+    // chart that ignored the roster you just built would send you to fix a gap
+    // you have already filled.
+    scheduledByInterval(params.userIds, params.date, { includeDrafts: true }),
   ]);
   const coverage = buildCoverage({
     intervals,
@@ -149,7 +153,7 @@ export async function autoSchedule(params: {
   const before = summariseCoverage(
     buildCoverage({
       intervals,
-      scheduledByInterval: await scheduledByInterval(userIds, date),
+      scheduledByInterval: await scheduledByInterval(userIds, date, { includeDrafts: true }),
       ...settings,
     }),
   );
@@ -164,7 +168,9 @@ export async function autoSchedule(params: {
   const skipped: AutoScheduleResult['skipped'] = [];
   const free: { id: number; name: string }[] = [];
   for (const u of available) {
-    if ((await getShifts(u.id, date)).length > 0) {
+    // Drafts included: somebody already drafted onto this day is not free,
+    // and rostering them twice would be discovered only at publication.
+    if ((await getShifts(u.id, date, { includeDrafts: true })).length > 0) {
       skipped.push({ userId: u.id, name: u.name, reason: 'Already has a shift on this date.' });
       continue;
     }
@@ -176,7 +182,7 @@ export async function autoSchedule(params: {
   for (let placed = 0; placed < limit; placed++) {
     const coverage = buildCoverage({
       intervals,
-      scheduledByInterval: await scheduledByInterval(userIds, date),
+      scheduledByInterval: await scheduledByInterval(userIds, date, { includeDrafts: true }),
       ...settings,
     });
 
@@ -213,7 +219,7 @@ export async function autoSchedule(params: {
   const after = summariseCoverage(
     buildCoverage({
       intervals,
-      scheduledByInterval: await scheduledByInterval(userIds, date),
+      scheduledByInterval: await scheduledByInterval(userIds, date, { includeDrafts: true }),
       ...settings,
     }),
   );

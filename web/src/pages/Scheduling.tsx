@@ -21,6 +21,7 @@ import { addDays, durationBetween, rollForward, timeOf, today, withTime } from '
 import { Planning } from './Planning';
 import { ForecastEntry } from './ForecastEntry';
 import { TeamWeek } from './TeamWeek';
+import { MultiSkill } from './MultiSkill';
 
 export function Scheduling() {
   return (
@@ -32,6 +33,7 @@ export function Scheduling() {
           { to: '/scheduling/group', label: 'Group Schedule Exceptions' },
           { to: '/scheduling/forecast', label: 'Forecast & Coverage' },
           { to: '/scheduling/volumes', label: 'Enter Forecast' },
+          { to: '/scheduling/skills', label: 'Multi-Skill' },
         ]}
       />
       <Routes>
@@ -40,6 +42,7 @@ export function Scheduling() {
         <Route path="group" element={<GroupExceptions />} />
         <Route path="forecast" element={<Planning />} />
         <Route path="volumes" element={<ForecastEntry />} />
+        <Route path="skills" element={<MultiSkill />} />
       </Routes>
     </>
   );
