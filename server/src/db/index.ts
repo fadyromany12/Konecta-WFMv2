@@ -1,74 +1,83 @@
-import Database from 'better-sqlite3';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { SCHEMA } from './schema.js';
+import { schemaFor } from './schema.js';
+import { createSqliteDatabase } from './sqlite.js';
+import { createPostgresDatabase } from './postgres.js';
+import type { Database } from './driver.js';
+import { resolve } from 'node:path';
+
+export type { Database, Row } from './driver.js';
 
 /**
- * better-sqlite3 normally finds its compiled addon through `bindings`, which
- * searches at runtime relative to the calling module. A bundler moves the
- * calling module, so that search can fail in a serverless bundle even when the
- * binary was shipped. We try the normal path first and only fall back to
- * naming the binary outright, which keeps local development untouched.
- */
-function openDatabase(file: string): Database.Database {
-  try {
-    return new Database(file);
-  } catch (err) {
-    const binding = findNativeBinding();
-    if (!binding) throw err;
-    console.log(`better-sqlite3: using explicitly located native binding at ${binding}`);
-    return new Database(file, { nativeBinding: binding });
-  }
-}
-
-function findNativeBinding(): string | null {
-  const relative = join('node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
-  const candidates = [
-    join(process.cwd(), relative),
-    join('/var/task', relative), // the serverless bundle root
-  ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
-}
-
-/**
- * Database location.
+ * Which database, decided by environment alone.
  *
- * `PULSE_DB=:memory:` gives an ephemeral database that lives for the life of
- * the process. That is what the hosted testing deployment uses: a serverless
- * instance seeds itself on cold start, so every deployment is reproducible and
- * nothing needs a writable disk. A file path is used everywhere else.
+ * `PULSE_DATABASE_URL` (or `DATABASE_URL`, `POSTGRES_URL`, which is what the
+ * hosted Postgres providers set for you) selects Postgres. Everything else
+ * falls back to SQLite, so a clone still runs with nothing installed.
+ *
+ * The precedence matters: a deployment that has been given a Postgres URL must
+ * never quietly fall back to an ephemeral local database if the connection
+ * fails. It should fail loudly instead, which is what happens — the first query
+ * throws rather than succeeding against the wrong store.
  */
-const configured =
+const postgresUrl =
+  process.env.PULSE_DATABASE_URL ??
+  process.env.DATABASE_URL ??
+  process.env.POSTGRES_URL ??
+  process.env.POSTGRES_URL_NON_POOLING ??
+  null;
+
+const sqliteFile =
   process.env.PULSE_DB ??
   // A serverless filesystem is read-only apart from /tmp, and /tmp does not
   // survive or get shared between instances. Defaulting to memory there means
-  // the deployment needs no configuration and no external database.
+  // the deployment needs no configuration — at the cost of losing everything on
+  // a cold start, which is exactly what a Postgres URL is for.
   (process.env.VERCEL ? ':memory:' : resolve(process.cwd(), 'data/pulse.db'));
 
-export const IS_MEMORY = configured === ':memory:';
+export const USING_POSTGRES = postgresUrl !== null;
+export const IS_MEMORY = !USING_POSTGRES && sqliteFile === ':memory:';
 
-if (!IS_MEMORY) mkdirSync(dirname(configured), { recursive: true });
+export const db: Database = USING_POSTGRES
+  ? createPostgresDatabase(postgresUrl!)
+  : createSqliteDatabase(sqliteFile);
 
-export const db = openDatabase(configured);
+/** Human description of where the data is, for the health endpoint and logs. */
+export function storageDescription(): string {
+  if (USING_POSTGRES) return 'postgres (durable, shared between instances)';
+  return IS_MEMORY ? 'in-memory (ephemeral — resets on restart)' : `sqlite file (${sqliteFile})`;
+}
 
-// WAL is a file-mode concern; an in-memory database neither needs nor accepts it.
-if (!IS_MEMORY) db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-db.exec(SCHEMA);
+let ready: Promise<void> | null = null;
 
-export function audit(
+/**
+ * Create the tables if they are missing.
+ *
+ * Called once, lazily, and memoised on the promise rather than a boolean so
+ * that concurrent cold-start requests wait for the same migration instead of
+ * racing to run it twice.
+ */
+export function ensureSchema(): Promise<void> {
+  ready ??= db.exec(schemaFor(db.dialect));
+  return ready;
+}
+
+export async function audit(
   actorId: number | null,
   entity: string,
   entityId: string | number,
   action: string,
   detail?: unknown,
-): void {
-  db.prepare(
+): Promise<void> {
+  await db.run(
     'INSERT INTO audit_log (actor_id, entity, entity_id, action, detail) VALUES (?, ?, ?, ?, ?)',
-  ).run(actorId, entity, String(entityId), action, detail === undefined ? null : JSON.stringify(detail));
+    [actorId, entity, String(entityId), action, detail === undefined ? null : JSON.stringify(detail)],
+  );
 }
 
-export function transact<T>(fn: () => T): T {
-  const run = db.transaction(fn);
-  return run();
+export function transact<T>(fn: () => Promise<T>): Promise<T> {
+  return db.transaction(fn);
+}
+
+/** Build `?, ?, ?` for an IN clause of n values. */
+export function placeholders(n: number): string {
+  return n === 0 ? 'NULL' : new Array(n).fill('?').join(',');
 }

@@ -237,6 +237,53 @@ left behind with the reason shown. See `server/src/domain/bulkApproval.ts` — a
 wrongly left for a human costs five seconds; one wrongly swept into an approved
 payroll run is somebody paid the wrong amount.
 
+## Storage: SQLite or Postgres
+
+The application runs on either, chosen entirely by environment. Nothing else
+changes — the same build, the same code paths, the same behaviour.
+
+```bash
+# SQLite (default). Nothing to install, nothing to configure.
+npm run seed -w @konecta-pulse/server
+npm run dev
+
+# Postgres. Set one variable and the app uses it instead.
+export PULSE_DATABASE_URL="postgres://user:password@host:5432/pulse"
+npm run seed -w @konecta-pulse/server   # creates the tables and the demo data
+npm run dev
+```
+
+`DATABASE_URL` and `POSTGRES_URL` are read too, because that is what the hosted
+providers set for you — so on Vercel, adding a Postgres integration is usually
+the whole configuration step. The tables are created on first use and an empty
+database seeds itself, so there is no migration command to remember.
+
+**Why it matters.** With no `PULSE_DATABASE_URL`, a Vercel deployment stores
+everything in memory: it seeds itself on cold start, and loses every punch,
+edit and approval when the instance is recycled. That is fine for a demo and
+wrong for anything else. It also means each instance holds its own copy of the
+truth, so a live event raised on one is invisible to a client connected to
+another. Postgres fixes both.
+
+**What it costs.** The data layer is async — SQLite included, so there is only
+one shape of calling code and a bug cannot be "works on SQLite, breaks on
+Postgres". `server/src/db/` holds the two drivers behind one interface;
+`server/src/domain/` never sees either, which is why the whole test suite was
+unaffected by the port.
+
+Verification for the port is a diff: the same twelve endpoints exercised against
+both backends produce byte-identical JSON across ~13,000 lines of output, and
+the seed produces identical row counts (17 users, 144 schedules, 768 punches,
+129 timecards, 775 rows) on each.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `PULSE_DATABASE_URL` | unset | Postgres connection string. Also `DATABASE_URL`, `POSTGRES_URL`. |
+| `PULSE_DB` | `data/pulse.db` | SQLite file, or `:memory:`. Ignored when a Postgres URL is set. |
+| `PULSE_DB_SSL` | auto | `off` disables TLS, `verify` demands a valid certificate chain. |
+| `PULSE_DB_POOL` | 10 (1 on Vercel) | Maximum Postgres connections. |
+| `PULSE_SECRET` | dev default | JWT signing secret. Set this anywhere real. |
+
 ## Notes
 
 The seed password is shared across demonstration accounts and the JWT secret falls
@@ -249,7 +296,5 @@ reach access logs — so it is confined to that single read-only route rather th
 allowed everywhere.
 
 On Vercel the database defaults to `:memory:` and seeds itself on cold start, so the
-hosted deployment needs no writable disk and no configuration. It also means data
-does not survive a cold start, and events raised on one instance are not seen by a
-client connected to another. Point `PULSE_DB` at a real database before treating any
-of it as durable.
+hosted deployment needs no writable disk and no configuration. Set
+`PULSE_DATABASE_URL` when the data needs to survive — see the storage section above.

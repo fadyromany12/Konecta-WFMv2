@@ -55,20 +55,21 @@ const DAY_END = '17:30';
  * serverless cold start can seed its own ephemeral database, which is how the
  * hosted testing deployment gets its data.
  */
-export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seeded: boolean } {
+export async function seed(options: { force?: boolean; quiet?: boolean } = {}): Promise<{ seeded: boolean }> {
   const { force = false, quiet = false } = options;
   const say = (...args: unknown[]) => {
     if (!quiet) console.log(...args);
   };
 
-  const existing = db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number };
-  if (existing.n > 0 && !force) {
-    say(`Database already has ${existing.n} users. Re-run with --force to rebuild.`);
+  const existing = await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM users');
+  const userCount = Number(existing?.n ?? 0);
+  if (userCount > 0 && !force) {
+    say(`Database already has ${userCount} users. Re-run with --force to rebuild.`);
     return { seeded: false };
   }
 
   if (force) {
-    transact(() => {
+    await transact(async () => {
       for (const table of [
         'extra_hours_bids',
         'extra_hours_offers',
@@ -94,9 +95,13 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
         'users',
         'projects',
       ]) {
-        db.prepare(`DELETE FROM ${table}`).run();
+        await db.run(`DELETE FROM ${table}`);
       }
-      db.prepare("DELETE FROM sqlite_sequence WHERE name NOT IN ('')").run();
+      // SQLite keeps its own counter table; Postgres owns identity sequences
+      // itself and has nothing equivalent to reset here.
+      if (db.dialect === 'sqlite') {
+        await db.run("DELETE FROM sqlite_sequence WHERE name NOT IN ('')");
+      }
     });
   }
 
@@ -109,27 +114,34 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     { id: 'A456', name: 'Konecta Care', fn: '111222333', site: 'Lisbon', region: 'EMEA' },
     { id: 'B900', name: 'Retail Support', fn: '444555666', site: 'Cairo', region: 'EMEA' },
   ];
-  const insertProject = db.prepare(
-    'INSERT INTO projects (activity_id, name, financial_number, site, region) VALUES (?, ?, ?, ?, ?)',
-  );
-  const insertDept = db.prepare('INSERT INTO project_departments (activity_id, department_code) VALUES (?, ?)');
-  const insertProjAct = db.prepare('INSERT INTO project_activities (activity_id, activity_code) VALUES (?, ?)');
-
-  transact(() => {
+  await transact(async () => {
     for (const p of projects) {
-      insertProject.run(p.id, p.name, p.fn, p.site, p.region);
-      for (const dept of ['10000', '10002', '10007']) insertDept.run(p.id, dept);
-      for (const activity of ACTIVITIES) insertProjAct.run(p.id, activity.code);
+      await db.run(
+        'INSERT INTO projects (activity_id, name, financial_number, site, region) VALUES (?, ?, ?, ?, ?)',
+        [p.id, p.name, p.fn, p.site, p.region],
+      );
+      for (const dept of ['10000', '10002', '10007']) {
+        await db.run('INSERT INTO project_departments (activity_id, department_code) VALUES (?, ?)', [
+          p.id,
+          dept,
+        ]);
+      }
+      for (const activity of ACTIVITIES) {
+        await db.run('INSERT INTO project_activities (activity_id, activity_code) VALUES (?, ?)', [
+          p.id,
+          activity.code,
+        ]);
+      }
     }
   });
 
   // ------------------------------------------------------------------- users
-  const insertUser = db.prepare(
-    `INSERT INTO users (employee_id, name, email, password_hash, role, manager_id, project_id, department_code, status, shift_rule, region, hire_date)
-     VALUES (@employee_id, @name, @email, @password_hash, @role, @manager_id, @project_id, @department_code, @status, @shift_rule, @region, @hire_date)`,
-  );
+  // Positional rather than named parameters: the two drivers spell named
+  // parameters differently, and the argument list here is fixed anyway.
+  const USER_SQL = `INSERT INTO users (employee_id, name, email, password_hash, role, manager_id, project_id, department_code, status, shift_rule, region, hire_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-  function addUser(u: {
+  async function addUser(u: {
     employee_id: string;
     name: string;
     email: string;
@@ -140,25 +152,24 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     department_code?: string;
     status?: string;
     hire_date?: string;
-  }): number {
-    const info = insertUser.run({
-      employee_id: u.employee_id,
-      name: u.name,
-      email: u.email,
-      password_hash: hash,
-      role: u.role,
-      manager_id: u.manager_id,
-      project_id: u.project_id,
-      department_code: u.department_code ?? '10000',
-      status: u.status ?? 'ACTIVE',
-      shift_rule: u.shift_rule ?? 'CR1',
-      region: 'EMEA',
-      hire_date: u.hire_date ?? addDays(today, -400),
-    });
-    return Number(info.lastInsertRowid);
+  }): Promise<number> {
+    return db.insert(USER_SQL, [
+      u.employee_id,
+      u.name,
+      u.email,
+      hash,
+      u.role,
+      u.manager_id,
+      u.project_id,
+      u.department_code ?? '10000',
+      u.status ?? 'ACTIVE',
+      u.shift_rule ?? 'CR1',
+      'EMEA',
+      u.hire_date ?? addDays(today, -400),
+    ]);
   }
 
-  const adminId = addUser({
+  const adminId = await addUser({
     employee_id: 'PLS0000001',
     name: 'Systems Administrator',
     email: 'admin@konecta.example',
@@ -167,7 +178,7 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     project_id: null,
   });
 
-  const omId = addUser({
+  const omId = await addUser({
     employee_id: 'OM0000010',
     name: 'Nadia Farouk',
     email: 'nadia.farouk@konecta.example',
@@ -176,7 +187,7 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     project_id: 'A123',
   });
 
-  const tlNightId = addUser({
+  const tlNightId = await addUser({
     employee_id: 'TL0000101',
     name: 'Youssef Adel',
     email: 'youssef.adel@konecta.example',
@@ -185,7 +196,7 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     project_id: 'A123',
   });
 
-  const tlDayId = addUser({
+  const tlDayId = await addUser({
     employee_id: 'TL0000102',
     name: 'Mariam Saleh',
     email: 'mariam.saleh@konecta.example',
@@ -195,7 +206,7 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     shift_rule: 'CR2',
   });
 
-  const trainerId = addUser({
+  const trainerId = await addUser({
     employee_id: 'TR0000201',
     name: 'Omar Hassan',
     email: 'omar.hassan@konecta.example',
@@ -204,59 +215,69 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     project_id: 'A123',
   });
 
-  const nightAdvisors = [
+  const nightAdvisorNames = [
     'Layla Mahmoud',
     'Karim Fouad',
     'Sara Nabil',
     'Hassan Tarek',
     'Dina Ashraf',
     'Amir Zaki',
-  ].map((name, i) =>
-    addUser({
-      employee_id: `AD000${1101 + i}`,
-      name,
-      email: emailFor(name),
-      role: 'ADVISOR',
-      manager_id: tlNightId,
-      project_id: 'A123',
-      shift_rule: i === 5 ? 'CR3' : 'CR1',
-    }),
-  );
+  ];
+  // Sequential rather than Promise.all: the ids are assigned in list order, and
+  // the seed reads better when Layla is always AD0001101.
+  const nightAdvisors: number[] = [];
+  for (const [i, name] of nightAdvisorNames.entries()) {
+    nightAdvisors.push(
+      await addUser({
+          employee_id: `AD000${1101 + i}`,
+        name,
+        email: emailFor(name),
+        role: 'ADVISOR',
+        manager_id: tlNightId,
+        project_id: 'A123',
+        shift_rule: i === 5 ? 'CR3' : 'CR1',
+      }),
+    );
+  }
 
-  const dayAdvisors = ['Yara Samir', 'Mostafa Gamal', 'Nour Ibrahim', 'Rami Adel'].map((name, i) =>
-    addUser({
-      employee_id: `AD000${1201 + i}`,
-      name,
-      email: emailFor(name),
-      role: 'ADVISOR',
-      manager_id: tlDayId,
-      project_id: 'A123',
-      shift_rule: 'CR2',
-    }),
-  );
+  const dayAdvisors: number[] = [];
+  for (const [i, name] of ['Yara Samir', 'Mostafa Gamal', 'Nour Ibrahim', 'Rami Adel'].entries()) {
+    dayAdvisors.push(
+      await addUser({
+        employee_id: `AD000${1201 + i}`,
+        name,
+        email: emailFor(name),
+        role: 'ADVISOR',
+        manager_id: tlDayId,
+        project_id: 'A123',
+        shift_rule: 'CR2',
+      }),
+    );
+  }
 
-  const newHires = ['Salma Reda', 'Tamer Wael'].map((name, i) =>
-    addUser({
-      employee_id: `AD000${1301 + i}`,
-      name,
-      email: emailFor(name),
-      role: 'ADVISOR',
-      manager_id: trainerId,
-      project_id: 'A123',
-      hire_date: addDays(today, -9),
-    }),
-  );
+  const newHires: number[] = [];
+  for (const [i, name] of ['Salma Reda', 'Tamer Wael'].entries()) {
+    newHires.push(
+      await addUser({
+        employee_id: `AD000${1301 + i}`,
+        name,
+        email: emailFor(name),
+        role: 'ADVISOR',
+        manager_id: trainerId,
+        project_id: 'A123',
+        hire_date: addDays(today, -9),
+      }),
+    );
+  }
 
   // The advisor whose week the training scenarios are built around.
   const focusId = nightAdvisors[0];
 
   // -------------------------------------------------------- shift rule change
-  db.prepare(
+  await db.run(
     'INSERT INTO shift_rule_changes (user_id, shift_rule, effective_date, created_by) VALUES (?, ?, ?, ?)',
-  ).run(nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId);
-
-  // ------------------------------------------------------- schedules & punches
-  const insertPunch = db.prepare('INSERT INTO punches (user_id, at, type, activity, source) VALUES (?, ?, ?, ?, ?)');
+    [nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId],
+  );
 
   const FROM = -14;
   // Schedules are published two days ahead; the forecast runs a week out. The
@@ -299,14 +320,13 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
         endAt: stamp(date, isNewHire ? '17:00' : endTime),
       };
 
-      saveShifts({ userId, date, shifts: [shift], actorId: adminId, source: 'IEX' });
+      await saveShifts({ userId, date, shifts: [shift], actorId: adminId, source: 'IEX' });
 
       if (offset > 0) continue; // nothing has been punched in the future
 
       // Today's punches are emitted only up to the current moment, so a shift
       // that is part way through looks part way through rather than abandoned.
-      seedPunches({
-        insertPunch,
+      await seedPunches({
         userId,
         date,
         night,
@@ -322,93 +342,102 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
   for (let offset = FROM; offset <= 0; offset++) {
     const date = addDays(today, offset);
     for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
-      generateTimecard({ userId, date, actorId: adminId, now: nowStamp() });
+      await generateTimecard({ userId, date, actorId: adminId, now: nowStamp() });
     }
   }
 
   // Approve everything older than five days so the summary is not a wall of red.
-  db.prepare(
-    `UPDATE timecards SET approved = 1, approved_by = ?, approved_at = datetime('now')
+  await db.run(
+    `UPDATE timecards SET approved = 1, approved_by = ?, approved_at = ?
      WHERE payroll_date < ? AND in_progress = 0`,
-  ).run(tlNightId, addDays(today, -5));
+    [tlNightId, nowStamp(), addDays(today, -5)],
+  );
 
   // ------------------------------------------------------------ payroll period
   const periodStart = addDays(today, -28);
   const periodEnd = addDays(today, -14);
-  db.prepare(
-    'INSERT INTO payroll_periods (region, start_date, end_date, cutoff_at) VALUES (?, ?, ?, ?)',
-  ).run('EMEA', periodStart, periodEnd, `${addDays(periodEnd, 1)} 23:59`);
-  db.prepare(
-    'INSERT INTO payroll_periods (region, start_date, end_date, cutoff_at) VALUES (?, ?, ?, ?)',
-  ).run('EMEA', addDays(today, -13), addDays(today, 1), `${addDays(today, 2)} 23:59`);
+  const PERIOD_SQL = 'INSERT INTO payroll_periods (region, start_date, end_date, cutoff_at) VALUES (?, ?, ?, ?)';
+  await db.run(PERIOD_SQL, ['EMEA', periodStart, periodEnd, `${addDays(periodEnd, 1)} 23:59`]);
+  await db.run(PERIOD_SQL, [
+    'EMEA',
+    addDays(today, -13),
+    addDays(today, 1),
+    `${addDays(today, 2)} 23:59`,
+  ]);
 
-  runPayroll({ region: 'EMEA', start: periodStart, end: periodEnd, actorId: adminId });
+  await runPayroll({ region: 'EMEA', start: periodStart, end: periodEnd, actorId: adminId });
 
   // ------------------------------------------------------------------ accruals
-  const insertAccrual = db.prepare(
-    'INSERT INTO accruals (user_id, accrual_type, balance_hours, as_of) VALUES (?, ?, ?, ?)',
-  );
+  const ACCRUAL_SQL = 'INSERT INTO accruals (user_id, accrual_type, balance_hours, as_of) VALUES (?, ?, ?, ?)';
   for (const [i, userId] of [...nightAdvisors, ...dayAdvisors, ...newHires].entries()) {
-    insertAccrual.run(userId, 'VACATION', 40 + i * 3.5, today);
-    insertAccrual.run(userId, 'SICK', 16 + (i % 4) * 4, today);
+    await db.run(ACCRUAL_SQL, [userId, 'VACATION', 40 + i * 3.5, today]);
+    await db.run(ACCRUAL_SQL, [userId, 'SICK', 16 + (i % 4) * 4, today]);
   }
 
-  db.prepare(
+  await db.run(
     `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(nightAdvisors[2], 'VACATION', addDays(today, 21), addDays(today, 23), 24, 'PENDING', 'Family event');
-  db.prepare(
+    [nightAdvisors[2], 'VACATION', addDays(today, 21), addDays(today, 23), 24, 'PENDING', 'Family event'],
+  );
+  await db.run(
     `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason, decided_by, decided_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-  ).run(dayAdvisors[0], 'VACATION', addDays(today, 30), addDays(today, 31), 16, 'APPROVED', 'Annual leave', tlDayId);
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      dayAdvisors[0],
+      'VACATION',
+      addDays(today, 30),
+      addDays(today, 31),
+      16,
+      'APPROVED',
+      'Annual leave',
+      tlDayId,
+      nowStamp(),
+    ],
+  );
 
   // -------------------------------------------------------- groups & delegation
-  const groupInfo = db
-    .prepare('INSERT INTO groups (name, type, owner_id) VALUES (?, ?, ?)')
-    .run('Night Coverage', 'CUSTOM', tlNightId);
-  const groupId = Number(groupInfo.lastInsertRowid);
+  const groupId = await db.insert('INSERT INTO groups (name, type, owner_id) VALUES (?, ?, ?)', [
+    'Night Coverage',
+    'CUSTOM',
+    tlNightId,
+  ]);
   for (const userId of nightAdvisors.slice(0, 3)) {
-    db.prepare('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)').run(groupId, userId);
+    await db.run('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)', [groupId, userId]);
   }
 
-  db.prepare('INSERT INTO alternates (user_id, alternate_user_id) VALUES (?, ?)').run(tlDayId, tlNightId);
+  await db.run('INSERT INTO alternates (user_id, alternate_user_id) VALUES (?, ?)', [tlDayId, tlNightId]);
 
   // ------------------------------------------------------------------ messages
-  const insertMessage = db.prepare(
-    'INSERT INTO messages (user_id, subject, body, severity) VALUES (?, ?, ?, ?)',
-  );
-  insertMessage.run(
+  const MESSAGE_SQL = 'INSERT INTO messages (user_id, subject, body, severity) VALUES (?, ?, ?, ?)';
+  await db.run(MESSAGE_SQL, [
     tlNightId,
     'Timecards awaiting approval',
     'You have unapproved timecards inside your three day edit window. Review and approve them before the payroll cut-off.',
     'WARN',
-  );
-  insertMessage.run(
+  ]);
+  await db.run(MESSAGE_SQL, [
     tlNightId,
     'Exception review',
     'Layla Mahmoud has a Long Lunch and a Late on her card. Confirm the reason before approving.',
     'WARN',
-  );
-  insertMessage.run(
+  ]);
+  await db.run(MESSAGE_SQL, [
     focusId,
     'Welcome to Konecta Pulse',
     'Clock on from the Web Clock when your shift starts. You can only clock on inside your scheduled window.',
     'INFO',
-  );
-  insertMessage.run(
+  ]);
+  await db.run(MESSAGE_SQL, [
     omId,
     'Payroll period closed',
     `Payroll has run for ${periodStart} to ${periodEnd}. Edits to that period are now post-payroll corrections.`,
     'INFO',
-  );
+  ]);
 
   // ------------------------------------------------------- forecast & planning
-  db.prepare(
+  await db.run(
     'INSERT INTO forecast_settings (project_id, service_goal, target_seconds, shrinkage) VALUES (?, ?, ?, ?)',
-  ).run('A123', 0.8, 20, 0.3);
-
-  const insertInterval = db.prepare(
-    'INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds) VALUES (?, ?, ?, ?, ?)',
+    ['A123', 0.8, 20, 0.3],
   );
 
   // A believable arrival curve: quiet overnight, a morning peak, a dip over
@@ -420,7 +449,7 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
     0.7, 0.6, 0.5, 0.42, 0.34, 0.28, 0.22, 0.18, 0.14, 0.11, 0.08, 0.06, //   18:00-23:30
   ];
 
-  transact(() => {
+  await transact(async () => {
     for (let offset = -14; offset <= 7; offset++) {
       const date = addDays(today, offset);
       const dow = new Date(date + 'T00:00:00Z').getUTCDay();
@@ -435,63 +464,65 @@ export function seed(options: { force?: boolean; quiet?: boolean } = {}): { seed
         // actually spends their time on.
         const volume = Math.round(share * 11 * dayFactor);
         const aht = 210 + ((i * 13) % 70); // handling time drifts through the day
-        insertInterval.run('A123', date, startTime, volume, aht);
+        await db.run(
+          'INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds) VALUES (?, ?, ?, ?, ?)',
+          ['A123', date, startTime, volume, aht],
+        );
       }
     }
   });
 
   // ------------------------------------------------------------ self service
-  const offerInfo = db
-    .prepare(
-      `INSERT INTO extra_hours_offers (project_id, date, start_time, end_time, slots, note, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run('A123', addDays(today, 3), '18:00', '22:00', 3, 'Backlog clearance, evening cover', tlNightId);
-  db.prepare('INSERT INTO extra_hours_bids (offer_id, user_id) VALUES (?, ?)').run(
-    Number(offerInfo.lastInsertRowid),
-    nightAdvisors[2],
-  );
-  db.prepare('INSERT INTO extra_hours_bids (offer_id, user_id) VALUES (?, ?)').run(
-    Number(offerInfo.lastInsertRowid),
-    nightAdvisors[3],
-  );
-  db.prepare(
-    `INSERT INTO extra_hours_offers (project_id, date, start_time, end_time, slots, note, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run('A123', addDays(today, 6), '09:00', '13:00', 2, 'Saturday campaign support', tlDayId);
+  const OFFER_SQL = `INSERT INTO extra_hours_offers (project_id, date, start_time, end_time, slots, note, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  const offerId = await db.insert(OFFER_SQL, [
+    'A123',
+    addDays(today, 3),
+    '18:00',
+    '22:00',
+    3,
+    'Backlog clearance, evening cover',
+    tlNightId,
+  ]);
+  const BID_SQL = 'INSERT INTO extra_hours_bids (offer_id, user_id) VALUES (?, ?)';
+  await db.run(BID_SQL, [offerId, nightAdvisors[2]]);
+  await db.run(BID_SQL, [offerId, nightAdvisors[3]]);
+  await db.run(OFFER_SQL, [
+    'A123',
+    addDays(today, 6),
+    '09:00',
+    '13:00',
+    2,
+    'Saturday campaign support',
+    tlDayId,
+  ]);
 
-  db.prepare(
-    `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
+  const SWAP_SQL = `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status)
+     VALUES (?, ?, ?, ?, ?, ?)`;
+  await db.run(SWAP_SQL, [
     nightAdvisors[1],
     addDays(today, 2),
     nightAdvisors[4],
     addDays(today, 3),
     'Family commitment',
     'PENDING_PEER',
-  );
-  db.prepare(
-    `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
+  ]);
+  await db.run(SWAP_SQL, [
     dayAdvisors[1],
     addDays(today, 4),
     dayAdvisors[2],
     addDays(today, 5),
     'Medical appointment',
     'PENDING_APPROVAL',
-  );
+  ]);
 
-  const counts = db
-    .prepare(
+  const counts = await db.get<any>(
       `SELECT (SELECT COUNT(*) FROM users) AS users,
               (SELECT COUNT(*) FROM schedules) AS schedules,
               (SELECT COUNT(*) FROM punches) AS punches,
               (SELECT COUNT(*) FROM timecards) AS timecards,
               (SELECT COUNT(*) FROM timecard_rows) AS rows`,
-    )
-    .get();
+  );
 
   say('Konecta Pulse seeded:', counts);
   say(`\nSign in with any of these — password for every account is "${PASSWORD}":`);
@@ -514,8 +545,7 @@ function emailFor(name: string): string {
  * gets a scripted week of problems so every exception path has real data behind
  * it on first launch.
  */
-function seedPunches(params: {
-  insertPunch: any;
+async function seedPunches(params: {
   userId: number;
   date: DateStr;
   night: boolean;
@@ -525,12 +555,16 @@ function seedPunches(params: {
   /** When set, punches later than this instant are not emitted. */
   notAfter: string | null;
 }) {
-  const { insertPunch, userId, date, night, isNewHire, isFocus, offset, notAfter } = params;
+  const { userId, date, night, isNewHire, isFocus, offset, notAfter } = params;
 
+  // Collected rather than written one at a time: a fortnight of punches for a
+  // whole roster is thousands of inserts, and one statement per day beats one
+  // per punch by an order of magnitude over a network.
+  const pending: unknown[][] = [];
   const punch = (day: DateStr, time: string, type: string, activity: string | null) => {
     const at = stamp(day, time);
     if (notAfter && at > notAfter) return;
-    insertPunch.run(userId, at, type, activity, 'WEB_CLOCK');
+    pending.push([userId, at, type, activity, 'WEB_CLOCK']);
   };
 
   const next = addDays(date, 1);
@@ -621,6 +655,13 @@ function seedPunches(params: {
     punch(date, '15:45', 'CHANGE', '01-001');
     punch(date, shiftTime('17:30', earlyOff), 'OFF', null);
   }
+
+  if (pending.length === 0) return;
+  const values = pending.map(() => '(?, ?, ?, ?, ?)').join(', ');
+  await db.run(
+    `INSERT INTO punches (user_id, at, type, activity, source) VALUES ${values}`,
+    pending.flat(),
+  );
 }
 
 function shiftTime(time: string, deltaMinutes: number): string {
@@ -632,5 +673,8 @@ function shiftTime(time: string, deltaMinutes: number): string {
 
 // Run directly (`npm run seed`) rather than when imported by the server.
 if (process.argv[1] && /seed\.(ts|js)$/.test(process.argv[1])) {
-  seed({ force: process.argv.includes('--force') });
+  const { ensureSchema } = await import('./index.js');
+  await ensureSchema();
+  await seed({ force: process.argv.includes('--force') });
+  await db.close();
 }

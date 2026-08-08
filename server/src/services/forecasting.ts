@@ -8,7 +8,7 @@
  * produce a defensible starting draft in a second rather than an afternoon.
  */
 
-import { audit, db, transact } from '../db/index.js';
+import { audit, db, placeholders, transact } from '../db/index.js';
 import {
   buildCoverage,
   INTERVAL_MINUTES,
@@ -17,7 +17,7 @@ import {
   type CoverageInterval,
 } from '../domain/forecast.js';
 import type { ScheduleShift } from '../domain/schedule.js';
-import { addDays, stamp, type DateStr } from '../domain/time.js';
+import { addDays, nowStamp, stamp, type DateStr } from '../domain/time.js';
 import { scheduledByInterval } from './intraday.js';
 import { getShifts, saveShifts } from './scheduling.js';
 
@@ -27,8 +27,8 @@ export interface ForecastSettings {
   shrinkage: number;
 }
 
-export function getSettings(projectId: string): ForecastSettings {
-  const row = db.prepare('SELECT * FROM forecast_settings WHERE project_id = ?').get(projectId) as any;
+export async function getSettings(projectId: string): Promise<ForecastSettings> {
+  const row = await db.get<any>('SELECT * FROM forecast_settings WHERE project_id = ?', [projectId]);
   return {
     serviceGoal: row?.service_goal ?? 0.8,
     targetSeconds: row?.target_seconds ?? 20,
@@ -36,16 +36,21 @@ export function getSettings(projectId: string): ForecastSettings {
   };
 }
 
-export function saveSettings(projectId: string, settings: ForecastSettings, actorId: number): void {
-  db.prepare(
+export async function saveSettings(
+  projectId: string,
+  settings: ForecastSettings,
+  actorId: number,
+): Promise<void> {
+  await db.run(
     `INSERT INTO forecast_settings (project_id, service_goal, target_seconds, shrinkage)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(project_id) DO UPDATE SET
        service_goal = excluded.service_goal,
        target_seconds = excluded.target_seconds,
        shrinkage = excluded.shrinkage`,
-  ).run(projectId, settings.serviceGoal, settings.targetSeconds, settings.shrinkage);
-  audit(actorId, 'forecast', projectId, 'SETTINGS', settings);
+    [projectId, settings.serviceGoal, settings.targetSeconds, settings.shrinkage],
+  );
+  await audit(actorId, 'forecast', projectId, 'SETTINGS', settings);
 }
 
 export interface ForecastRow {
@@ -54,12 +59,11 @@ export interface ForecastRow {
   ahtSeconds: number;
 }
 
-export function getForecast(projectId: string, date: DateStr): ForecastRow[] {
-  const rows = db
-    .prepare(
-      'SELECT start_time, volume, aht_seconds FROM forecast_intervals WHERE project_id = ? AND date = ? ORDER BY start_time',
-    )
-    .all(projectId, date) as { start_time: string; volume: number; aht_seconds: number }[];
+export async function getForecast(projectId: string, date: DateStr): Promise<ForecastRow[]> {
+  const rows = await db.all<{ start_time: string; volume: number; aht_seconds: number }>(
+    'SELECT start_time, volume, aht_seconds FROM forecast_intervals WHERE project_id = ? AND date = ? ORDER BY start_time',
+    [projectId, date],
+  );
 
   const byTime = new Map(rows.map((r) => [r.start_time, r]));
   // Always return the full grid so the chart has a continuous x axis.
@@ -70,23 +74,24 @@ export function getForecast(projectId: string, date: DateStr): ForecastRow[] {
   }));
 }
 
-export function saveForecast(
+export async function saveForecast(
   projectId: string,
   date: DateStr,
   rows: ForecastRow[],
   actorId: number,
-): void {
-  transact(() => {
-    const upsert = db.prepare(
-      `INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds, updated_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(project_id, date, start_time) DO UPDATE SET
-         volume = excluded.volume, aht_seconds = excluded.aht_seconds, updated_at = datetime('now')`,
-    );
+): Promise<void> {
+  const now = nowStamp();
+  await transact(async () => {
     for (const row of rows) {
-      upsert.run(projectId, date, row.startTime, Math.max(0, row.volume), Math.max(1, row.ahtSeconds));
+      await db.run(
+        `INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, date, start_time) DO UPDATE SET
+           volume = excluded.volume, aht_seconds = excluded.aht_seconds, updated_at = excluded.updated_at`,
+        [projectId, date, row.startTime, Math.max(0, row.volume), Math.max(1, row.ahtSeconds), now],
+      );
     }
-    audit(actorId, 'forecast', `${projectId}:${date}`, 'SAVE', { intervals: rows.length });
+    await audit(actorId, 'forecast', `${projectId}:${date}`, 'SAVE', { intervals: rows.length });
   });
 }
 
@@ -97,16 +102,19 @@ export interface CoverageResult {
   summary: ReturnType<typeof summariseCoverage>;
 }
 
-export function coverageFor(params: {
+export async function coverageFor(params: {
   projectId: string;
   date: DateStr;
   userIds: number[];
-}): CoverageResult {
-  const settings = getSettings(params.projectId);
-  const intervals = getForecast(params.projectId, params.date);
+}): Promise<CoverageResult> {
+  const [settings, intervals, scheduled] = await Promise.all([
+    getSettings(params.projectId),
+    getForecast(params.projectId, params.date),
+    scheduledByInterval(params.userIds, params.date),
+  ]);
   const coverage = buildCoverage({
     intervals,
-    scheduledByInterval: scheduledByInterval(params.userIds, params.date),
+    scheduledByInterval: scheduled,
     serviceGoal: settings.serviceGoal,
     targetSeconds: settings.targetSeconds,
     shrinkage: settings.shrinkage,
@@ -128,48 +136,47 @@ const SHIFT_LENGTH_MINUTES = 8.5 * 60; // eight hours plus an unpaid meal
  * and places a shift over it, using whoever is free that day, until either the
  * gap closes or everybody is rostered.
  */
-export function autoSchedule(params: {
+export async function autoSchedule(params: {
   projectId: string;
   date: DateStr;
   userIds: number[];
   actorId: number;
   maxShifts?: number;
-}): AutoScheduleResult {
+}): Promise<AutoScheduleResult> {
   const { projectId, date, userIds, actorId } = params;
-  const settings = getSettings(projectId);
-  const intervals = getForecast(projectId, date);
+  const [settings, intervals] = await Promise.all([getSettings(projectId), getForecast(projectId, date)]);
 
   const before = summariseCoverage(
     buildCoverage({
       intervals,
-      scheduledByInterval: scheduledByInterval(userIds, date),
+      scheduledByInterval: await scheduledByInterval(userIds, date),
       ...settings,
     }),
   );
 
-  const available = db
-    .prepare(
-      `SELECT id, name FROM users WHERE id IN (${userIds.map(() => '?').join(',') || 'NULL'})
-         AND role = 'ADVISOR' AND status = 'ACTIVE' ORDER BY name`,
-    )
-    .all(...userIds) as { id: number; name: string }[];
+  const available = await db.all<{ id: number; name: string }>(
+    `SELECT id, name FROM users WHERE id IN (${placeholders(userIds.length)})
+       AND role = 'ADVISOR' AND status = 'ACTIVE' ORDER BY name`,
+    userIds,
+  );
 
   const created: AutoScheduleResult['created'] = [];
   const skipped: AutoScheduleResult['skipped'] = [];
-  const free = available.filter((u) => {
-    if (getShifts(u.id, date).length > 0) {
+  const free: { id: number; name: string }[] = [];
+  for (const u of available) {
+    if ((await getShifts(u.id, date)).length > 0) {
       skipped.push({ userId: u.id, name: u.name, reason: 'Already has a shift on this date.' });
-      return false;
+      continue;
     }
-    return true;
-  });
+    free.push(u);
+  }
 
   const limit = Math.min(params.maxShifts ?? free.length, free.length);
 
   for (let placed = 0; placed < limit; placed++) {
     const coverage = buildCoverage({
       intervals,
-      scheduledByInterval: scheduledByInterval(userIds, date),
+      scheduledByInterval: await scheduledByInterval(userIds, date),
       ...settings,
     });
 
@@ -185,7 +192,7 @@ export function autoSchedule(params: {
 
     const user = free[placed];
     const shift = buildShift(date, startMinutes);
-    const result = saveShifts({ userId: user.id, date, shifts: [shift], actorId, source: 'AUTO' });
+    const result = await saveShifts({ userId: user.id, date, shifts: [shift], actorId, source: 'AUTO' });
 
     if (result.ok) {
       created.push({
@@ -206,12 +213,12 @@ export function autoSchedule(params: {
   const after = summariseCoverage(
     buildCoverage({
       intervals,
-      scheduledByInterval: scheduledByInterval(userIds, date),
+      scheduledByInterval: await scheduledByInterval(userIds, date),
       ...settings,
     }),
   );
 
-  audit(actorId, 'forecast', `${projectId}:${date}`, 'AUTO_SCHEDULE', {
+  await audit(actorId, 'forecast', `${projectId}:${date}`, 'AUTO_SCHEDULE', {
     created: created.length,
     before: before.understaffedIntervals,
     after: after.understaffedIntervals,
