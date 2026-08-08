@@ -1,22 +1,39 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { GETTING_AROUND, ROLE_GUIDES, TAB_GUIDES, guideForPath, roleGuide } from '../content/guide';
+import {
+  GETTING_AROUND,
+  ROLE_GUIDES,
+  TAB_GUIDES,
+  guideForPath,
+  roleGuide,
+  roleNoteFor,
+} from '../content/guide';
+import { restartTour } from './Tour';
 import { useSession } from '../state';
-
-const SEEN_KEY = 'pulse.guide.seen';
 
 /**
  * A slide-in guide that already knows where you are and who you are, so it
  * opens on the screen you are stuck on rather than at a table of contents.
- * Opens with the ? key, and offers itself once on a first visit.
+ * Opens with the ? key.
  */
-export function GuideDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function GuideDrawer({
+  open,
+  onClose,
+  onStartTour,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onStartTour?: () => void;
+}) {
   const { user } = useSession();
   const location = useLocation();
   const [showAll, setShowAll] = useState(false);
 
   const tab = guideForPath(location.pathname);
   const mine = user ? roleGuide(user.role) : undefined;
+  // What this screen is for *this* role, which is a different question from
+  // what the screen is for.
+  const note = user ? roleNoteFor(location.pathname, user.role) : undefined;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -58,6 +75,32 @@ export function GuideDrawer({ open, onClose }: { open: boolean; onClose: () => v
           {!showAll && tab && (
             <>
               <p className="guide-purpose">{tab.purpose}</p>
+
+              {note && (
+                <div className="guide-role-note">
+                  <h3>As {article(mine?.label ?? 'user')}</h3>
+                  <p>{note.focus}</p>
+                  {note.steps && (
+                    <ol className="guide-steps">
+                      {note.steps.map((step) => (
+                        <li key={step.title}>
+                          <strong>{step.title}</strong>
+                          <span>{step.body}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  {note.watchFor && (
+                    <ul className="issues">
+                      {note.watchFor.map((item, i) => (
+                        <li key={i} className="issue issue-warning">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               <Section title="How to use it">
                 <ol className="guide-steps">
@@ -121,6 +164,18 @@ export function GuideDrawer({ open, onClose }: { open: boolean; onClose: () => v
         </div>
 
         <footer className="guide-foot">
+          {onStartTour && (
+            <button
+              className="btn"
+              onClick={() => {
+                restartTour();
+                onClose();
+                onStartTour();
+              }}
+            >
+              Take the tour again
+            </button>
+          )}
           <span className="muted">
             Press <kbd>?</kbd> anywhere to open this, <kbd>Esc</kbd> to close.
           </span>
@@ -128,6 +183,11 @@ export function GuideDrawer({ open, onClose }: { open: boolean; onClose: () => v
       </aside>
     </>
   );
+}
+
+/** "an Advisor", "a Team Leader" — the labels are data, so the article is too. */
+function article(label: string): string {
+  return `${/^[aeiou]/i.test(label) ? 'an' : 'a'} ${label}`;
 }
 
 function GettingAround() {
@@ -199,49 +259,6 @@ function RoleCard({
           </ul>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** The one-time nudge, shown at the bottom of the screen. */
-export function GuidePrompt({ onOpen }: { onOpen: () => void }) {
-  const { user } = useSession();
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    if (!user) return;
-    if (localStorage.getItem(SEEN_KEY)) return;
-    const timer = setTimeout(() => setVisible(true), 900);
-    return () => clearTimeout(timer);
-  }, [user]);
-
-  if (!visible) return null;
-
-  function close() {
-    localStorage.setItem(SEEN_KEY, '1');
-    setVisible(false);
-  }
-
-  return (
-    <div className="guide-prompt" role="status">
-      <div>
-        <strong>First time here?</strong>
-        <div className="muted">
-          There is a guide for every screen and every role. It knows which one you are on.
-        </div>
-      </div>
-      <button
-        className="btn btn-primary"
-        onClick={() => {
-          close();
-          onOpen();
-        }}
-      >
-        Show me
-      </button>
-      <button className="btn btn-ghost" onClick={close}>
-        Later
-      </button>
     </div>
   );
 }

@@ -237,6 +237,31 @@ left behind with the reason shown. See `server/src/domain/bulkApproval.ts` — a
 wrongly left for a human costs five seconds; one wrongly swept into an approved
 payroll run is somebody paid the wrong amount.
 
+## The guide and the tour
+
+Two different things, deliberately.
+
+**The guide** (`?` on any screen, or the palette) is reference you go to when
+stuck. It opens on the screen you are looking at and leads with a section
+written for your role — a Team Leader clearing yesterday inside a three day
+window and an Operations Manager making a post-payroll correction six weeks back
+are on the same screen for different reasons, and telling both the same thing is
+how a guide gets ignored. Content lives in `web/src/content/guide.ts`:
+`TAB_GUIDES` for the screen, `ROLE_TAB_NOTES` for the role-on-that-screen.
+
+**The tour** points at the real controls on your own screen with your own data,
+and it is per role — an advisor never sees the payroll summary, because a tour
+that shows people screens they cannot use teaches them the tool is not for them.
+A step whose target is not on the page is skipped rather than shown floating.
+
+The tour is **versioned**, which is the part that matters for keeping it alive.
+Edit the steps in `web/src/content/tutorial.ts`, bump `TUTORIAL_VERSION`, and
+set `WHATS_NEW` to one line. Anyone who completed an older version is re-offered
+it with that line as the reason; anyone mid-tour restarts rather than resuming
+into steps that may have moved. Somebody who says "not now" is not asked again
+until the version changes. That makes updating the tutorial a normal edit rather
+than a decision about whether to interrupt everybody.
+
 ## Storage: SQLite or Postgres
 
 The application runs on either, chosen entirely by environment. Nothing else

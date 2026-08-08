@@ -29,10 +29,12 @@ export function CommandPalette({
   open,
   onClose,
   onOpenGuide,
+  onStartTour,
 }: {
   open: boolean;
   onClose: () => void;
   onOpenGuide: () => void;
+  onStartTour?: () => void;
 }) {
   const navigate = useNavigate();
   const { user, signOut } = useSession();
@@ -107,6 +109,21 @@ export function CommandPalette({
           onClose();
         },
       },
+      ...(onStartTour
+        ? [
+            {
+              id: 'tour',
+              group: 'Help',
+              label: 'Take the guided tour',
+              hint: 'points at the real controls',
+              keywords: 'tutorial walkthrough tour onboarding show me around',
+              run: () => {
+                onClose();
+                onStartTour();
+              },
+            } as Command,
+          ]
+        : []),
       ...(['light', 'dark', 'system'] as ThemeChoice[]).map((choice) => ({
         id: `theme-${choice}`,
         group: 'Appearance',
@@ -151,7 +168,7 @@ export function CommandPalette({
     }
 
     return list;
-  }, [navigate, onClose, onOpenGuide, people, signOut, user]);
+  }, [navigate, onClose, onOpenGuide, onStartTour, people, signOut, user]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './state';
-import { GuideDrawer, GuidePrompt } from './components/Guide';
+import { GuideDrawer } from './components/Guide';
+import { Tour, TourPrompt } from './components/Tour';
 import { ThemeToggle } from './components/ThemeToggle';
 import { NotificationBell } from './components/Notifications';
 import { PulseLine } from './components/PulseLine';
@@ -32,6 +33,8 @@ export function App() {
   const location = useLocation();
   const [guideOpen, setGuideOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [tour, setTour] = useState<{ open: boolean; at: number }>({ open: false, at: 0 });
+  const startTour = useCallback((at = 0) => setTour({ open: true, at }), []);
 
   const toggleGuide = useCallback(() => setGuideOpen((v) => !v), []);
   const togglePalette = useCallback(() => setPaletteOpen((v) => !v), []);
@@ -126,9 +129,15 @@ export function App() {
         </Routes>
       </main>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenGuide={openGuide} />
-      <GuideDrawer open={guideOpen} onClose={() => setGuideOpen(false)} />
-      <GuidePrompt onOpen={openGuide} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onOpenGuide={openGuide}
+        onStartTour={() => startTour(0)}
+      />
+      <GuideDrawer open={guideOpen} onClose={() => setGuideOpen(false)} onStartTour={() => startTour(0)} />
+      <Tour open={tour.open} startAt={tour.at} onClose={() => setTour({ open: false, at: 0 })} />
+      {!tour.open && !guideOpen && <TourPrompt onStart={startTour} />}
     </div>
   );
 }

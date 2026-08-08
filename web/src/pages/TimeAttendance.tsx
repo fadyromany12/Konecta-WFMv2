@@ -172,6 +172,7 @@ function PayrollSummary() {
         <Button onClick={() => summary.reload()}>Go</Button>
         <Button
           variant="primary"
+          data-tour="bulk-approve"
           onClick={approveClean}
           disabled={busy || cleanCount === 0}
           title="Approves only cards with no exceptions, no errors, a real clock-off and a finished day"

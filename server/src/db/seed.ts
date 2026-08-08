@@ -274,10 +274,12 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
   const focusId = nightAdvisors[0];
 
   // -------------------------------------------------------- shift rule change
-  await db.run(
-    'INSERT INTO shift_rule_changes (user_id, shift_rule, effective_date, created_by) VALUES (?, ?, ?, ?)',
-    [nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId],
-  );
+  const RULE_SQL =
+    'INSERT INTO shift_rule_changes (user_id, shift_rule, effective_date, created_by) VALUES (?, ?, ?, ?)';
+  await db.run(RULE_SQL, [nightAdvisors[1], 'CR2', addDays(today, 14), tlNightId]);
+  // One already in force and one pending, so the history reads as a history.
+  await db.run(RULE_SQL, [dayAdvisors[0], 'CR2', addDays(today, -30), tlDayId]);
+  await db.run(RULE_SQL, [dayAdvisors[0], 'CR3', addDays(today, 21), tlDayId]);
 
   const FROM = -14;
   // Schedules are published two days ahead; the forecast runs a week out. The
@@ -389,20 +391,48 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [nightAdvisors[2], 'VACATION', addDays(today, 21), addDays(today, 23), 24, 'PENDING', 'Family event'],
   );
+  const TOR_DECIDED = `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason, decided_by, decided_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  await db.run(TOR_DECIDED, [
+    dayAdvisors[0],
+    'VACATION',
+    addDays(today, 30),
+    addDays(today, 31),
+    16,
+    'APPROVED',
+    'Annual leave',
+    tlDayId,
+    nowStamp(),
+  ]);
+  // Sick leave taken retrospectively, unpaid leave declined for coverage, and a
+  // second pending request — between them the screen shows every path a
+  // request can take.
+  await db.run(TOR_DECIDED, [
+    nightAdvisors[4],
+    'SICK',
+    addDays(today, -8),
+    addDays(today, -8),
+    8,
+    'APPROVED',
+    'Called in sick',
+    tlNightId,
+    nowStamp(),
+  ]);
+  await db.run(TOR_DECIDED, [
+    dayAdvisors[3],
+    'UNPAID',
+    addDays(today, 9),
+    addDays(today, 11),
+    24,
+    'DECLINED',
+    'Extended trip — declined, week already short',
+    tlDayId,
+    nowStamp(),
+  ]);
   await db.run(
-    `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason, decided_by, decided_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      dayAdvisors[0],
-      'VACATION',
-      addDays(today, 30),
-      addDays(today, 31),
-      16,
-      'APPROVED',
-      'Annual leave',
-      tlDayId,
-      nowStamp(),
-    ],
+    `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, status, reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [dayAdvisors[2], 'VACATION', addDays(today, 17), addDays(today, 18), 16, 'PENDING', 'Long weekend'],
   );
 
   // -------------------------------------------------------- groups & delegation
@@ -413,6 +443,15 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
   ]);
   for (const userId of nightAdvisors.slice(0, 3)) {
     await db.run('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)', [groupId, userId]);
+  }
+
+  const dayGroupId = await db.insert('INSERT INTO groups (name, type, owner_id) VALUES (?, ?, ?)', [
+    'Weekend Cover',
+    'CUSTOM',
+    tlDayId,
+  ]);
+  for (const userId of dayAdvisors.slice(0, 2)) {
+    await db.run('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)', [dayGroupId, userId]);
   }
 
   await db.run('INSERT INTO alternates (user_id, alternate_user_id) VALUES (?, ?)', [tlDayId, tlNightId]);
@@ -441,6 +480,51 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
     omId,
     'Payroll period closed',
     `Payroll has run for ${periodStart} to ${periodEnd}. Edits to that period are now post-payroll corrections.`,
+    'INFO',
+  ]);
+
+  // Every role should find something waiting when they first sign in — an empty
+  // notification centre teaches people it is not worth checking.
+  await db.run(MESSAGE_SQL, [
+    tlDayId,
+    'Swap waiting on you',
+    'Two of your advisors have agreed a swap for next week. It needs your approval before either schedule moves.',
+    'INFO',
+  ]);
+  await db.run(MESSAGE_SQL, [
+    tlDayId,
+    'Time off request',
+    'A vacation request is pending for a week that is already short on cover. Check the day before approving.',
+    'WARN',
+  ]);
+  await db.run(MESSAGE_SQL, [
+    trainerId,
+    'New starters clocking in',
+    'Your class is on their first week. Trainee cards usually need correcting for the first day or two — you have a six day window.',
+    'INFO',
+  ]);
+  await db.run(MESSAGE_SQL, [
+    omId,
+    'Coverage gap next week',
+    'The forecast asks for more than the published roster covers on several evening intervals. Auto-schedule can draft against it.',
+    'WARN',
+  ]);
+  await db.run(MESSAGE_SQL, [
+    adminId,
+    'Welcome',
+    'You can see every project and team, and the full audit trail. Day-to-day corrections are better made by the supervisor who owns the team.',
+    'INFO',
+  ]);
+  await db.run(MESSAGE_SQL, [
+    dayAdvisors[1],
+    'Extra hours awarded',
+    'You were awarded the month-end backlog block. It is on your schedule, so you can clock on for it.',
+    'INFO',
+  ]);
+  await db.run(MESSAGE_SQL, [
+    nightAdvisors[2],
+    'Swap approved',
+    'Your shift swap went through. Check My Shifts — your working days have changed.',
     'INFO',
   ]);
 
@@ -507,8 +591,33 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
     tlDayId,
   ]);
 
-  const SWAP_SQL = `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status)
-     VALUES (?, ?, ?, ?, ?, ?)`;
+  // One already settled, so the screen shows what an awarded offer looks like
+  // rather than only open ones nobody has acted on.
+  const filledId = await db.insert(OFFER_SQL, [
+    'A123',
+    addDays(today, -4),
+    '17:00',
+    '21:00',
+    1,
+    'Month-end backlog',
+    tlNightId,
+  ]);
+  await db.run('INSERT INTO extra_hours_bids (offer_id, user_id, status) VALUES (?, ?, ?)', [
+    filledId,
+    dayAdvisors[1],
+    'AWARDED',
+  ]);
+  await db.run('INSERT INTO extra_hours_bids (offer_id, user_id, status) VALUES (?, ?, ?)', [
+    filledId,
+    dayAdvisors[2],
+    'PENDING',
+  ]);
+  await db.run('UPDATE extra_hours_offers SET status = ? WHERE id = ?', ['FILLED', filledId]);
+
+  // Every state a swap can be in, so the screen shows the whole flow rather
+  // than only the half that is still waiting on somebody.
+  const SWAP_SQL = `INSERT INTO shift_swaps (requester_id, requester_date, counterparty_id, counterparty_date, reason, status, decided_by, decided_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
   await db.run(SWAP_SQL, [
     nightAdvisors[1],
     addDays(today, 2),
@@ -516,6 +625,8 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
     addDays(today, 3),
     'Family commitment',
     'PENDING_PEER',
+    null,
+    null,
   ]);
   await db.run(SWAP_SQL, [
     dayAdvisors[1],
@@ -524,6 +635,28 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
     addDays(today, 5),
     'Medical appointment',
     'PENDING_APPROVAL',
+    null,
+    null,
+  ]);
+  await db.run(SWAP_SQL, [
+    nightAdvisors[2],
+    addDays(today, -6),
+    nightAdvisors[3],
+    addDays(today, -5),
+    'Swapped to cover a college exam',
+    'APPROVED',
+    tlNightId,
+    nowStamp(),
+  ]);
+  await db.run(SWAP_SQL, [
+    dayAdvisors[3],
+    addDays(today, -3),
+    dayAdvisors[0],
+    addDays(today, -2),
+    'Wanted the Saturday off',
+    'DECLINED',
+    tlDayId,
+    nowStamp(),
   ]);
 
   const counts = await db.get<any>(

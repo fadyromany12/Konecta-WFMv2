@@ -3074,3 +3074,161 @@ tbody tr:hover {
     transform: none;
   }
 }
+
+/* ------------------------------------------------------------------- tour --
+ * The spotlight is one element: a transparent box with an enormous spread
+ * shadow, so the "hole" and the dimming are the same object and can never drift
+ * apart while it animates between steps.
+ */
+
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.tour-scrim {
+  position: absolute;
+  inset: 0;
+  animation: fade 220ms var(--ease-soft) both;
+}
+
+.tour-spot {
+  position: absolute;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--k-aqua);
+  box-shadow:
+    0 0 0 9999px rgba(3, 4, 22, 0.66),
+    0 0 22px color-mix(in oklab, var(--k-aqua) 55%, transparent);
+  transition:
+    top 340ms var(--ease),
+    left 340ms var(--ease),
+    width 340ms var(--ease),
+    height 340ms var(--ease);
+  pointer-events: none;
+}
+
+/* The scrim colour has to cover the system-preference case as well as the
+   explicit toggle. `data-theme` is absent when the reader has not chosen, which
+   is the common case — keying only off the attribute meant a light-mode visitor
+   got the dark scrim. */
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) .tour-spot {
+    border-color: var(--k-indigo);
+    box-shadow:
+      0 0 0 9999px rgba(23, 27, 74, 0.42),
+      0 0 22px color-mix(in oklab, var(--k-indigo) 45%, transparent);
+  }
+}
+
+html[data-theme='light'] .tour-spot {
+  border-color: var(--k-indigo);
+  box-shadow:
+    0 0 0 9999px rgba(23, 27, 74, 0.42),
+    0 0 22px color-mix(in oklab, var(--k-indigo) 45%, transparent);
+}
+
+.tour-bubble {
+  position: absolute;
+  width: 21rem;
+  max-width: calc(100vw - 2rem);
+  padding: 1rem 1.05rem 0.8rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: linear-gradient(var(--float-tint), var(--float-tint)), var(--float);
+  backdrop-filter: blur(26px) saturate(170%);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
+  box-shadow: var(--elev-3);
+  animation: palette-in 260ms var(--ease) both;
+  transition:
+    top 340ms var(--ease),
+    left 340ms var(--ease);
+}
+
+.tour-count {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+}
+
+.tour-bubble h3 {
+  margin: 0.25rem 0 0.35rem;
+  font-size: 1rem;
+}
+
+.tour-bubble p {
+  margin: 0 0 0.9rem;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* A thin progress bar rather than a count of dots: at six steps the dots are
+   too small to read and too many to count at a glance. */
+.tour-progress {
+  margin-top: 0.8rem;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--glass-sunken);
+  overflow: hidden;
+}
+
+.tour-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--k-indigo), var(--k-aqua));
+  transition: width 340ms var(--ease);
+}
+
+/* -------------------------------------------------------- role note in guide */
+
+.guide-role-note {
+  border: 1px solid color-mix(in oklab, var(--k-violet) 40%, var(--hairline));
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 0.9rem;
+  margin-bottom: 1.2rem;
+  background: color-mix(in oklab, var(--k-violet) 10%, transparent);
+}
+
+.guide-role-note h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--k-violet);
+}
+
+html[data-theme='light'] .guide-role-note h3 {
+  color: var(--k-indigo);
+}
+
+.guide-role-note > p {
+  margin: 0 0 0.6rem;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot,
+  .tour-bubble,
+  .tour-progress span {
+    transition: none;
+    animation: none;
+  }
+}
