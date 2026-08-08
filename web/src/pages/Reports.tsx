@@ -175,7 +175,7 @@ function PulseReport() {
                 <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-dim)' }}>
                   Scheduled vs actual
                 </h3>
-                <table>
+                <table aria-label="Adherence by scheduled activity">
                   <thead>
                     <tr>
                       <th>Activity</th>
@@ -331,7 +331,7 @@ function ExceptionReport() {
         {data.loading && <Loading what="exceptions" />}
         {data.data?.rows.length === 0 && !data.loading && <Empty>No exceptions in that range. </Empty>}
         <div className="table-scroll">
-          <table>
+          <table aria-label="Exceptions in the range">
             <thead>
               <tr>
                 <th>Date</th>
@@ -452,7 +452,7 @@ function QueryTool() {
         {data.loading && <Loading what="results" />}
         {data.data?.rows.length === 0 && !data.loading && <Empty>Nothing matched those filters.</Empty>}
         <div className="table-scroll">
-          <table>
+          <table aria-label="Query results">
             <thead>
               <tr>
                 <th>Date</th>

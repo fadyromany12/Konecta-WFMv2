@@ -21,13 +21,21 @@ import { addDays, today } from '../lib/time';
  * the inside of a shift still belongs in the day editor, so a click goes there.
  */
 
+interface Breach {
+  kind: 'rest' | 'consecutive' | 'weekly';
+  date: string;
+  message: string;
+  over: number;
+}
+
 interface TeamWeekPerson {
   userId: number;
   employeeId: string;
   name: string;
   role: string;
-  days: { date: string; shifts: ScheduleShift[] }[];
+  days: { date: string; shifts: ScheduleShift[]; leave: string | null }[];
   minutes: number;
+  breaches: Breach[];
 }
 
 interface DayCover {
@@ -49,6 +57,7 @@ interface TeamWeekResult {
   people: TeamWeekPerson[];
   /** Unpublished person-days in the range. */
   drafts: number;
+  breaching: number;
   cover: DayCover[];
 }
 
@@ -100,17 +109,21 @@ export function TeamWeek() {
   const dates = week.data?.dates ?? [];
   const people = week.data?.people ?? [];
   const drafts = week.data?.drafts ?? 0;
+  const breaching = week.data?.breaching ?? 0;
   const cover = useMemo(
     () => new Map((week.data?.cover ?? []).map((c) => [c.date, c])),
     [week.data],
   );
 
-  /** Cover per day, so a thin Friday is visible without counting rows. */
+  /** On shift, and away on approved leave — two different answers to "who is off". */
   const perDay = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<string, { on: number; leave: number }>();
     for (const person of people) {
       for (const day of person.days) {
-        if (day.shifts.length > 0) counts.set(day.date, (counts.get(day.date) ?? 0) + 1);
+        const cell = counts.get(day.date) ?? { on: 0, leave: 0 };
+        if (day.shifts.length > 0) cell.on++;
+        if (day.leave) cell.leave++;
+        counts.set(day.date, cell);
       }
     }
     return counts;
@@ -145,13 +158,20 @@ export function TeamWeek() {
 
     setMoving(true);
     try {
-      await api.post('/schedules/move', {
+      const result = await api.post<{ ok: boolean; warnings?: Breach[] }>('/schedules/move', {
         userId: source.userId,
         fromDate: source.fromDate,
         toDate,
         shiftNo: source.shiftNo,
       });
-      toast.success(`Shift moved to ${toDate}.`, 'They have been told, and both days were re-derived.');
+      // A move that breaches a working-time limit still happens — the whole
+      // point is that these are judgement calls — but it says so rather than
+      // reporting a clean success and leaving it to be discovered.
+      if (result.warnings && result.warnings.length > 0) {
+        toast.warn(`Moved to ${toDate}, but look at this.`, result.warnings.map((w) => w.message).join(' '));
+      } else {
+        toast.success(`Shift moved to ${toDate}.`, 'They have been told, and both days were re-derived.');
+      }
       setNonce((n) => n + 1);
     } catch (err) {
       toast.error('That move was refused.', (err as Error).message);
@@ -177,6 +197,15 @@ export function TeamWeek() {
         </span>
       </Toolbar>
 
+      {breaching > 0 && (
+        <Banner tone="warn">
+          {breaching} {breaching === 1 ? 'person' : 'people'} in this week breach a working-time limit — too
+          little rest between shifts, too many days in a row, or too many hours. Hover the ⚠ beside a name for
+          which. These are warnings, not refusals: somebody volunteering to cover is a real thing, and a tool
+          that blocked it would just be worked around on paper.
+        </Banner>
+      )}
+
       {drafts > 0 && (
         <Banner tone="info">
           {drafts} day{drafts === 1 ? '' : 's'} in this week {drafts === 1 ? 'is' : 'are'} still a draft. Only you
@@ -198,7 +227,7 @@ export function TeamWeek() {
           subtitle="Drag a shift onto another day to move it. Click one to open that day in the editor."
         >
           <div className="table-scroll">
-            <table className="team-week">
+            <table className="team-week" aria-label="Team schedule for the week">
               <thead>
                 <tr>
                   <th>Advisor</th>
@@ -207,7 +236,10 @@ export function TeamWeek() {
                       <div className="tw-head">
                         <span>{weekdayOf(date)}</span>
                         <span className="muted mono">{date.slice(5)}</span>
-                        <span className="muted">{perDay.get(date) ?? 0} on</span>
+                        <span className="muted">
+                          {perDay.get(date)?.on ?? 0} on
+                          {(perDay.get(date)?.leave ?? 0) > 0 && ` · ${perDay.get(date)!.leave} away`}
+                        </span>
                         <CoverLine cover={cover.get(date)} />
                       </div>
                     </th>
@@ -221,6 +253,14 @@ export function TeamWeek() {
                     <th scope="row" className="tw-name">
                       <span>{person.name}</span>
                       <span className="muted mono">{person.employeeId}</span>
+                      {person.breaches.length > 0 && (
+                        <span
+                          className="tw-breach"
+                          title={person.breaches.map((b) => b.message).join('\n')}
+                        >
+                          ⚠ {breachLabel(person.breaches)}
+                        </span>
+                      )}
                     </th>
 
                     {person.days.map((day) => {
@@ -247,7 +287,13 @@ export function TeamWeek() {
                           }}
                         >
                           {day.shifts.length === 0 ? (
-                            <span className="tw-off">·</span>
+                            day.leave ? (
+                              <span className="tw-leave" title={`Approved ${day.leave.toLowerCase()}`}>
+                                {day.leave.replace(/_/g, ' ').toLowerCase()}
+                              </span>
+                            ) : (
+                              <span className="tw-off">·</span>
+                            )
                           ) : (
                             day.shifts.map((shift) => (
                               <button
@@ -338,4 +384,14 @@ function CoverLine({ cover }: { cover?: DayCover }) {
       {cover.demandIntervals} short
     </span>
   );
+}
+
+/** The shortest true summary of what a person's week breaches. */
+function breachLabel(breaches: Breach[]): string {
+  const kinds = new Set(breaches.map((b) => b.kind));
+  const parts: string[] = [];
+  if (kinds.has('rest')) parts.push('rest');
+  if (kinds.has('consecutive')) parts.push('days in a row');
+  if (kinds.has('weekly')) parts.push('hours');
+  return parts.join(', ');
 }

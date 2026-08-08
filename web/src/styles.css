@@ -2132,6 +2132,18 @@ kbd {
   }
 }
 
+/* The same arrival for a panel that spans the screen and is not centred. */
+@keyframes nudge-wide {
+  from {
+    opacity: 0;
+    transform: translateY(1.2rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .help-btn {
   width: 1.9rem;
   height: 1.9rem;
@@ -3676,4 +3688,295 @@ html[data-theme='light'] .guide-role-note h3 {
 }
 .history-schedule-publish {
   border-left-color: var(--good);
+}
+
+.tw-breach {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--warn);
+  cursor: help;
+}
+
+/* Away is not the same as not rostered, and must not look the same. */
+.tw-leave {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 0.16rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--k-magenta) 14%, transparent);
+  color: var(--text-dim);
+  border: 1px solid color-mix(in oklab, var(--k-magenta) 30%, transparent);
+}
+
+/* ==========================================================================
+   Phones
+   --------------------------------------------------------------------------
+   Advisors are the largest group of users and almost none of them are at a
+   desk — they clock on, check when they are working next, and ask for a day
+   off. All three were reachable at 390px only by scrolling sideways: the
+   header alone measured 708px, which pushed the notification bell, the theme
+   toggle, the guide and Sign out clean off the screen.
+   
+   The approach is subtractive rather than a second layout. Everything that is
+   context on a large screen — the strapline, the keyboard hint, the employee
+   number — is not worth a line on a phone, and removing it is what makes room
+   for the parts that are.
+   ========================================================================== */
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.55rem 0.85rem;
+  }
+
+  /* The strapline is five wrapped lines at this width and says nothing an
+     advisor needs. */
+  .brand-sub {
+    display: none;
+  }
+
+  .topbar-spacer {
+    display: none;
+  }
+
+  .brand {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* A phone has no ⌘K. The button stays as a search affordance, without the
+     hint that cannot be acted on. */
+  .cmdk-label,
+  .cmdk kbd {
+    display: none;
+  }
+
+  .cmdk::after {
+    content: '⌕';
+    font-size: 1.05rem;
+    line-height: 1;
+  }
+
+  /* Identity keeps the name and drops the rest — the role and employee number
+     are reference, not orientation. */
+  .who-role {
+    display: none;
+  }
+
+  .who-name {
+    font-size: 0.78rem;
+    max-width: 8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabs {
+    padding: 0 0.5rem;
+    top: 52px;
+    scroll-snap-type: x proximity;
+    /* A scrollable strip that looks like a full one is a strip nobody scrolls;
+       the fade says there is more to the right. */
+    -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent);
+    mask-image: linear-gradient(90deg, #000 88%, transparent);
+  }
+
+  .tab {
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+
+  main {
+    padding: 0.8rem 0.7rem 3rem;
+  }
+
+  /* A flex or grid child refuses to shrink below its content by default, and
+     a `<select>` is as wide as its longest option. Together that made the
+     clock card 407px inside a 390px screen and pushed the page sideways —
+     a single unshrinkable activity name doing it. */
+  .card,
+  .clock,
+  .clock-state,
+  .clock-actions,
+  .toolbar,
+  .field {
+    min-width: 0;
+  }
+
+  select,
+  input {
+    max-width: 100%;
+  }
+
+  /* Tap targets. Anything under about 40px is a miss on a thumb, and the
+     measurement said fifteen of them on the time-off screen alone. The header
+     controls are the worst of them — the theme toggle was 23px. */
+  .cmdk,
+  .bell,
+  .help-btn,
+  .theme-toggle button,
+  .btn,
+  .tab,
+  .subtab,
+  select,
+  /* Bare `input`, not a list of types: an `<input>` with no type attribute is
+     a text field and `input[type='text']` does not match it. */
+  input:not([type='checkbox']):not([type='radio']) {
+    min-height: 42px;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* The sub-tab strip scrolls like the main one rather than wrapping into two
+     rows and pushing the content it belongs to off the first screen. */
+  .subtabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent);
+    mask-image: linear-gradient(90deg, #000 90%, transparent);
+  }
+
+  .subtab {
+    white-space: nowrap;
+  }
+
+  /* Toolbars wrap rather than stacking. Forcing a column put Previous / This
+     week / Next on three full-width rows and ate half the first screen, when
+     they are obviously one group and fit on two lines. Fields still take the
+     width, because a half-width select truncates its own contents. */
+  .toolbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+
+  .toolbar > .btn {
+    flex: 1 1 auto;
+  }
+
+  .toolbar > .field,
+  .toolbar > label.field {
+    flex: 1 1 100%;
+  }
+
+  /* The tour offer is a fixed panel and was clipping its own button. It is
+     centred by a translate on larger screens, which has to go with the
+     centring or the panel sits half off the left edge. */
+  .guide-prompt {
+    left: 0.6rem;
+    right: 0.6rem;
+    bottom: 0.6rem;
+    max-width: none;
+    flex-wrap: wrap;
+    /* Its own entrance animation carries the centring translate and fills
+       forwards, so an animation beats a plain `transform: none` and the panel
+       stayed half off the left edge. It needs its own keyframes, not an
+       override. */
+    animation: nudge-wide 620ms var(--ease) both;
+  }
+
+  .guide-prompt .btn {
+    flex: 1 1 auto;
+    white-space: nowrap;
+  }
+
+  .field select,
+  .field input {
+    width: 100%;
+  }
+
+  /* The stats row reads as two columns rather than one long ladder. */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    padding: 0.85rem 0.9rem;
+  }
+
+  /* One column of day cards rather than a cramped grid of seven. */
+  .week {
+    grid-template-columns: 1fr;
+  }
+
+  /* Wide tables scroll inside their own container; the page never does. */
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    font-size: 0.8rem;
+  }
+
+  .clock-time {
+    font-size: clamp(2.6rem, 16vw, 4rem);
+  }
+}
+
+/* Small phones: the last things that still fit at 760 no longer do. */
+@media (max-width: 420px) {
+  .brand-mark {
+    font-size: 1rem;
+  }
+
+  .who {
+    display: none;
+  }
+
+  .stats {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ------------------------------------------------------------- skip link */
+
+/*
+ * Off-screen until focused, then a real button at the top left. Positioned
+ * rather than hidden with `display: none`, because a hidden element is not
+ * focusable and a skip link that cannot be focused is decoration.
+ */
+.skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 100;
+  transform: translateY(calc(-100% - 1rem));
+  padding: 0.55rem 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--float);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.84rem;
+  text-decoration: none;
+  box-shadow: var(--elev-2);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link {
+    transition: none;
+  }
+}
+
+/* The skip target takes focus programmatically; it must not draw a ring for it. */
+main:focus {
+  outline: none;
 }

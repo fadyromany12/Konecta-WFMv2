@@ -25,6 +25,12 @@ import {
   type Stamp,
 } from '../domain/time.js';
 import type { Issue } from '../domain/timecard.js';
+import {
+  checkWorkingTime,
+  workingTimeIssues,
+  type RosterDay,
+  type WorkingTimeBreach,
+} from '../domain/workingTime.js';
 
 interface ScheduleRecord {
   id: number;
@@ -167,9 +173,43 @@ export interface TeamWeekPerson {
   employeeId: string;
   name: string;
   role: string;
-  days: { date: DateStr; shifts: ScheduleShift[] }[];
+  days: {
+    date: DateStr;
+    shifts: ScheduleShift[];
+    /** Approved leave type, where they have some. */
+    leave: string | null;
+  }[];
   /** Scheduled minutes across the range, so a week can be judged at a glance. */
   minutes: number;
+  /** Working-time limits this person's week breaches. */
+  breaches: WorkingTimeBreach[];
+}
+
+/** Approved leave for many people across a range, in one query. */
+async function leaveFor(
+  userIds: number[],
+  start: DateStr,
+  end: DateStr,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (userIds.length === 0) return out;
+  const rows = await db.all<{
+    user_id: number;
+    accrual_type: string;
+    start_date: string;
+    end_date: string;
+  }>(
+    `SELECT user_id, accrual_type, start_date, end_date FROM time_off_requests
+     WHERE user_id IN (${placeholders(userIds.length)})
+       AND status = 'APPROVED' AND end_date >= ? AND start_date <= ?`,
+    [...userIds, start, end],
+  );
+  for (const row of rows) {
+    for (let d = row.start_date as DateStr; d <= row.end_date; d = addDays(d, 1)) {
+      if (d >= start && d <= end) out.set(`${row.user_id}|${d}`, row.accrual_type);
+    }
+  }
+  return out;
 }
 
 /**
@@ -191,35 +231,54 @@ export async function teamWeek(params: {
   people: TeamWeekPerson[];
   /** Unpublished person-days in the range, for the publish button. */
   drafts: number;
+  /** How many people in the range breach a working-time limit. */
+  breaching: number;
 }> {
   const { userIds, start, end } = params;
   const dates: DateStr[] = [];
   for (let d = start; d <= end; d = addDays(d, 1)) dates.push(d);
 
-  if (userIds.length === 0) return { start, end, dates, people: [], drafts: 0 };
+  if (userIds.length === 0) return { start, end, dates, people: [], drafts: 0, breaching: 0 };
 
   const users = await db.all<{ id: number; employee_id: string; name: string; role: string }>(
     `SELECT id, employee_id, name, role FROM users
      WHERE id IN (${placeholders(userIds.length)}) ORDER BY name`,
     userIds,
   );
+  // Padded a week either side. Rest between shifts and the rolling weekly
+  // total both reach outside the range on screen, and a window that starts on
+  // Monday would report a clean week that is anything but.
+  const padded: DateStr[] = [];
+  for (let d = addDays(start, -7); d <= addDays(end, 7); d = addDays(d, 1)) padded.push(d);
+
+  const ids = users.map((u) => u.id);
   // Drafts included: this is the screen they are built on, and a planner who
   // cannot see their own unpublished work would be planning blind.
-  const shiftsByKey = await getShiftsFor(
-    users.map((u) => u.id),
-    dates,
-    { includeDrafts: true },
-  );
+  const [shiftsByKey, leave] = await Promise.all([
+    getShiftsFor(ids, padded, { includeDrafts: true }),
+    leaveFor(ids, start, end),
+  ]);
 
   let drafts = 0;
+  let breaching = 0;
   const people = users.map((user) => {
     let minutes = 0;
     const days = dates.map((date) => {
       const shifts = shiftsByKey.get(`${user.id}|${date}`) ?? [];
       for (const shift of shifts) minutes += shiftSpan(shift).minutes;
       if (shifts.some((s) => s.status === 'DRAFT')) drafts++;
-      return { date, shifts };
+      return { date, shifts, leave: leave.get(`${user.id}|${date}`) ?? null };
     });
+
+    const breaches = checkWorkingTime({
+      days: padded.map((date) => ({
+        date,
+        shifts: shiftsByKey.get(`${user.id}|${date}`) ?? [],
+      })),
+      focus: dates,
+    });
+    if (breaches.length > 0) breaching++;
+
     return {
       userId: user.id,
       employeeId: user.employee_id,
@@ -227,10 +286,11 @@ export async function teamWeek(params: {
       role: user.role,
       days,
       minutes,
+      breaches,
     };
   });
 
-  return { start, end, dates, people, drafts };
+  return { start, end, dates, people, drafts, breaching };
 }
 
 export interface PublishResult {
@@ -336,7 +396,7 @@ export async function moveShift(params: {
   shiftNo: number;
   today: DateStr;
   actorId: number;
-}): Promise<{ ok: boolean; message?: string; issues?: Issue[] }> {
+}): Promise<{ ok: boolean; message?: string; issues?: Issue[]; warnings?: WorkingTimeBreach[] }> {
   const { userId, fromDate, toDate, shiftNo, today, actorId } = params;
 
   if (fromDate === toDate) return { ok: false, message: 'That shift is already on that day.' };
@@ -364,6 +424,26 @@ export async function moveShift(params: {
     const destinationShifts = [...target, shifted].sort(
       (a, b) => (shiftSpan(a).startAt < shiftSpan(b).startAt ? -1 : 1),
     );
+
+    // Judged before anything is written, and across both days at once — a move
+    // can breach rest at the day it lands on and relieve it at the day it left,
+    // and checking them one at a time would report a breach that the completed
+    // move does not create.
+    const context = await contextIssues({
+      userId,
+      dates: [fromDate, toDate],
+      proposed: new Map([
+        [fromDate, source.filter((s) => s.shiftNo !== shiftNo)],
+        [toDate, destinationShifts],
+      ]),
+      // A drag adds work to the day it lands on. Refusing is right here and
+      // nowhere else.
+      leaveLevel: 'error',
+    });
+    const blocking = context.issues.filter((i) => i.level === 'error');
+    if (blocking.length > 0) {
+      return { ok: false, message: blocking[0].message, issues: blocking };
+    }
 
     const destination = await saveShifts({
       userId,
@@ -394,7 +474,9 @@ export async function moveShift(params: {
       actorId,
       status: source.find((s) => s.shiftNo !== shiftNo)?.status ?? 'PUBLISHED',
     });
-    return { ok: true };
+    // Warnings survive the move rather than blocking it: the supervisor is
+    // told what they have just created and is left to decide about it.
+    return { ok: true, warnings: context.breaches };
   });
 }
 
@@ -433,6 +515,17 @@ export async function saveShifts(params: {
     .map((s, i) => ({ ...s, shiftNo: i + 1 }));
 
   const issues = validateSchedule(shifts, date);
+
+  // Beyond the day itself: approved leave, rest, consecutive days, the week.
+  // Checked against what is *about* to be saved rather than what is stored,
+  // which is why the proposal is passed in as an override.
+  const context = await contextIssues({
+    userId,
+    dates: [date],
+    proposed: new Map([[date, shifts]]),
+  });
+  issues.push(...context.issues);
+
   if (issues.some((i) => i.level === 'error')) {
     return { ok: false, issues, shifts };
   }
@@ -614,4 +707,106 @@ export async function removeGroupException(params: {
   }
 
   return { removed, skipped };
+}
+
+// ------------------------------------------------------------ working time
+
+/**
+ * The roster either side of the days being changed.
+ *
+ * Padded deliberately. A shift moved onto Thursday can breach rest against
+ * Wednesday *and* against Friday, and the weekly total needs six days of
+ * history to be a rolling week rather than a calendar one. A window that
+ * starts on the day being edited sees none of that and reports a clean save.
+ */
+export async function rosterWindow(
+  userId: number,
+  dates: DateStr[],
+  overrides?: Map<DateStr, ScheduleShift[]>,
+): Promise<RosterDay[]> {
+  const sorted = [...dates].sort();
+  const from = addDays(sorted[0], -7);
+  const to = addDays(sorted[sorted.length - 1], 7);
+
+  const span: DateStr[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) span.push(d);
+
+  const stored = await getShiftsFor([userId], span, { includeDrafts: true });
+  return span.map((date) => ({
+    date,
+    // The caller's pending version wins where it has one, so the check judges
+    // what is about to be saved rather than what is already there.
+    shifts: overrides?.get(date) ?? stored.get(`${userId}|${date}`) ?? [],
+  }));
+}
+
+/** Days in a range the advisor has approved leave for. */
+export async function approvedLeaveDays(
+  userId: number,
+  dates: DateStr[],
+): Promise<Map<DateStr, string>> {
+  const out = new Map<DateStr, string>();
+  if (dates.length === 0) return out;
+  const sorted = [...dates].sort();
+
+  const rows = await db.all<{ accrual_type: string; start_date: string; end_date: string }>(
+    `SELECT accrual_type, start_date, end_date FROM time_off_requests
+     WHERE user_id = ? AND status = 'APPROVED'
+       AND end_date >= ? AND start_date <= ?`,
+    [userId, sorted[0], sorted[sorted.length - 1]],
+  );
+
+  for (const date of dates) {
+    const hit = rows.find((r) => date >= r.start_date && date <= r.end_date);
+    if (hit) out.set(date, hit.accrual_type);
+  }
+  return out;
+}
+
+/**
+ * Everything that is wrong with a proposed change, beyond the day itself.
+ *
+ * The working-time limits are always warnings. Every one of them is
+ * legitimately broken sometimes — somebody volunteers to cover, a person asks
+ * to compress their week — and refusing would push the arrangement onto paper
+ * where nothing can see it at all.
+ *
+ * Leave depends on the gesture, which is the subtlety worth stating. Approving
+ * leave does not delete the shift that was already there, so a supervisor
+ * editing an unrelated row on that day must not be blocked by it — that is a
+ * warning. Dragging a shift *onto* a leave day is different: it is new work
+ * being added to a day the person is contractually not present for, with no
+ * other feedback channel in the gesture. That one refuses.
+ */
+export async function contextIssues(params: {
+  userId: number;
+  dates: DateStr[];
+  proposed: Map<DateStr, ScheduleShift[]>;
+  /** How hard to be about approved leave. Defaults to a warning. */
+  leaveLevel?: 'error' | 'warning';
+}): Promise<{ issues: Issue[]; breaches: WorkingTimeBreach[] }> {
+  const { userId, dates, proposed } = params;
+  const leaveLevel = params.leaveLevel ?? 'warning';
+
+  const scheduled = dates.filter((d) => (proposed.get(d) ?? []).length > 0);
+  const [leave, window] = await Promise.all([
+    approvedLeaveDays(userId, scheduled),
+    rosterWindow(userId, dates, proposed),
+  ]);
+
+  const issues: Issue[] = [];
+  for (const [date, type] of leave) {
+    const what = type.toLowerCase().replace(/_/g, ' ');
+    issues.push({
+      level: leaveLevel,
+      message:
+        leaveLevel === 'error'
+          ? `${date} is approved ${what} for this advisor — they are not there. ` +
+            'Cancel the leave first if they are actually working it.'
+          : `Heads up: ${date} is approved ${what} for this advisor.`,
+    });
+  }
+
+  const breaches = checkWorkingTime({ days: window, focus: dates });
+  return { issues: [...issues, ...workingTimeIssues(breaches)], breaches };
 }

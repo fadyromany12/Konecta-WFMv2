@@ -276,6 +276,50 @@ check('a move onto the same day is refused',
 check('advisors cannot move shifts',
   (await call('POST','/schedules/move',ADV,{userId:target.id,fromDate:day(2),toDate:day(3),shiftNo:1})).status === 403);
 
+console.log('=== WORKING TIME & LEAVE ===');
+check('team week reports who breaches a limit', typeof tw.body?.breaching === 'number');
+check('a breach names the rule it broke',
+  (tw.body?.people ?? []).every((p) =>
+    (p.breaches ?? []).every((b) => ['rest','consecutive','weekly'].includes(b.kind) && b.message)));
+check('the seeded roster is mostly legal',
+  (tw.body?.breaching ?? 99) <= 4, `${tw.body?.breaching} of ${tw.body?.people?.length} breaching`);
+check('every day carries a leave field',
+  (tw.body?.people ?? []).every((p) => p.days.every((d) => 'leave' in d)));
+
+// Approved leave should show as leave, not as a blank day.
+const leaveWeek = await call('GET',`/schedules/team?start=${day(0)}&end=${day(9)}`,TL);
+const onLeave = (leaveWeek.body?.people ?? [])
+  .flatMap((p) => p.days.map((d) => ({ userId: p.userId, ...d })))
+  .find((d) => d.leave);
+check('approved leave is visible on the grid', !!onLeave, JSON.stringify(onLeave?.leave));
+
+if (onLeave) {
+  // Dragging a shift onto a leave day is new work on a day they are not there.
+  const donor = (leaveWeek.body?.people ?? [])
+    .find((p) => p.userId === onLeave.userId)
+    ?.days.find((d) => d.date > day(0) && d.date !== onLeave.date && d.shifts.length === 1);
+  if (donor) {
+    const onto = await call('POST','/schedules/move',TL,
+      {userId:onLeave.userId,fromDate:donor.date,toDate:onLeave.date,shiftNo:donor.shifts[0].shiftNo});
+    check('a shift cannot be dragged onto approved leave',
+      onto.body?.ok === false && /leave|not there/i.test(onto.body?.message ?? ''),
+      JSON.stringify(onto.body).slice(0,160));
+  } else check('no donor shift for the leave-drag check (skipped)', true);
+
+  // The day editor warns instead of refusing: approving leave does not delete
+  // a shift that was already there, so blocking the edit would be wrong.
+  const editing = await call('PUT',`/schedules/${onLeave.userId}/${onLeave.date}`,TL,{shifts:[{
+    shiftNo:1,
+    rows:[{startAt:`${onLeave.date} 09:00`,activityKey:'SHIFT_START'}],
+    endAt:`${onLeave.date} 17:00`,
+  }]});
+  check('the editor warns about leave rather than refusing',
+    editing.status === 200 && (editing.body?.issues ?? []).some((i) => /approved/i.test(i.message)),
+    JSON.stringify(editing.body?.issues ?? []).slice(0,160));
+  // Put the day back as it was.
+  await call('PUT',`/schedules/${onLeave.userId}/${onLeave.date}`,TL,{shifts:[]});
+}
+
 console.log('=== FORECAST & PLANNING ===');
 const fc = (await call('GET',`/forecast?date=${day(2)}`,TL)).body;
 check('forecast returns a full grid', fc?.forecast?.length === 48, `${fc?.forecast?.length} intervals`);

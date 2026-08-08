@@ -59,6 +59,14 @@ export function App() {
 
   return (
     <div className="app">
+      {/* First in the tab order, invisible until focused. Without it a
+          keyboard user tabs through the brand, search, bell, theme, guide,
+          identity and every navigation tab before reaching the screen they
+          asked for — on every single page load. */}
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">
@@ -114,7 +122,13 @@ export function App() {
 
       {/* Keying on the tab restarts the entrance animation on navigation, so a
           new screen arrives rather than swapping in place. */}
-      <main key={location.pathname.split('/')[1]}>
+      {/* `tabIndex={-1}` is what makes the skip link actually work. Without it
+          the hash changes, the page scrolls, and focus stays on the body — so
+          the next Tab goes back to the header the link just skipped. */}
+      <main id="main" tabIndex={-1} key={location.pathname.split('/')[1]}>
+        {/* Every page had no h1 at all, so a screen reader's heading outline
+            started at the first card and never said which screen this was. */}
+        <h1 className="sr-only">{tabs.find((t) => location.pathname.startsWith(t.to))?.label ?? 'Konecta Pulse'}</h1>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />

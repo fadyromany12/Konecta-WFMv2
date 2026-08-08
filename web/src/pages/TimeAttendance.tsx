@@ -319,7 +319,7 @@ function PayrollSummary() {
 
         {rows.length > 0 && (
           <div className="table-scroll">
-            <table>
+            <table aria-label="Timecards and their approval state">
               <thead>
                 <tr>
                   <th>Payroll date</th>
@@ -366,6 +366,10 @@ function PayrollSummary() {
                         checked={row.approved}
                         disabled={row.inProgress}
                         onChange={(e) => toggleApproval(row, e.target.checked)}
+                        // Eighteen identical "checkbox, checked" announcements
+                        // is not a usable approvals screen. The name has to
+                        // carry whose card and which day.
+                        aria-label={`Approve ${row.name}'s timecard for ${row.payrollDate}`}
                       />
                     </td>
                     <td>
@@ -763,7 +767,7 @@ function TimecardEditor() {
 
       <div className="grid-2">
         <Card title="Payroll shift detail" tone="quiet">
-          <table>
+          <table aria-label="Timecard rows">
             <tbody>
               <tr>
                 <th>Payroll date</th>

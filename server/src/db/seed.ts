@@ -304,26 +304,53 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
   const TO = 9;
   const DRAFT_FROM = 3;
 
+  // Two advisors deliberately left over the limit, so the working-time warning
+  // has something true to point at. A warning that never fires is as useless
+  // as one that always does — and before this, all sixteen were in breach.
+  const overworked = new Set([nightAdvisors[0], dayAdvisors[0]]);
+
+  const allAdvisors = [...nightAdvisors, ...dayAdvisors];
+
+  /**
+   * The two days off in every seven — a fixed rota line per person.
+   *
+   * Fixed is the whole point, and it took a rolling weekly check to see why.
+   * Five 8.5 hour days is 42.5 hours and legal; six is 51 and is not. Rotating
+   * who covers the weekend gave everybody five days in every *calendar* week
+   * and still produced illegal weeks, because a person who works Friday and
+   * Saturday one week and Sunday to Thursday the next has seven days in a row
+   * across the boundary. Rest days that never move guarantee exactly two in
+   * every rolling seven, which is the only pattern that always holds.
+   *
+   * Sunday is 0 and the local weekend is Friday and Saturday. Half the roster
+   * takes that weekend off; the other half is the weekend line and takes two
+   * weekdays instead, staggered so the floor is never empty on one day.
+   */
+  const restDaysFor = (userId: number): Set<number> => {
+    if (overworked.has(userId)) return new Set();
+    // Anybody not on a rota line — a trainee, say — takes the ordinary
+    // Friday and Saturday.
+    const i = allAdvisors.indexOf(userId);
+    if (i < 0) return new Set([5, 6]);
+    if (i % 2 === 0) return new Set([5, 6]);
+    return new Set([i % 5, (i % 5 + 2) % 5]);
+  };
+
   for (let offset = FROM; offset <= TO; offset++) {
     const date = addDays(today, offset);
     const dow = new Date(date + 'T00:00:00Z').getUTCDay();
-    const weekend = dow === 5 || dow === 6; // Friday & Saturday weekend
-
     // A contact centre does not close at the weekend, it runs thinner — and a
     // seed that empties the roster on Friday and Saturday means the live board
     // is blank for two days in seven, which reads as a broken screen rather
-    // than a quiet one. Roughly the first half of each team covers weekends,
-    // on rotation so it is not always the same people.
-    const weekendCrew = new Set([
-      ...nightAdvisors.filter((_, i) => (i + Math.abs(offset)) % 2 === 0),
-      ...dayAdvisors.filter((_, i) => (i + Math.abs(offset)) % 2 === 0),
-    ]);
-
+    // than a quiet one. The weekend line below is what keeps it staffed.
     for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
       const night = nightAdvisors.includes(userId);
       const isNewHire = newHires.includes(userId);
-      if (weekend && !isNewHire && !weekendCrew.has(userId)) continue;
       if (isNewHire && offset < -9) continue;
+      // New hires get the same two days off as anybody else. Exempting them
+      // put a class of trainees on seven day weeks, which is both illegal and
+      // the last thing you would do to somebody in their first fortnight.
+      if (restDaysFor(userId).has(dow)) continue;
 
       const template = night ? NIGHT_SHIFT : DAY_SHIFT;
       const endTime = night ? NIGHT_END : DAY_END;
@@ -431,6 +458,32 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
   // Sick leave taken retrospectively, unpaid leave declined for coverage, and a
   // second pending request — between them the screen shows every path a
   // request can take.
+  // Approved leave inside the week the grid opens on, so "who is off on
+  // Thursday" has a real answer and the difference between away and simply
+  // not rostered is visible on screen rather than only in the rules.
+  await db.run(TOR_DECIDED, [
+    dayAdvisors[1],
+    'VACATION',
+    addDays(today, 4),
+    addDays(today, 6),
+    24,
+    'APPROVED',
+    'Booked months ago',
+    tlDayId,
+    nowStamp(),
+  ]);
+  await db.run(TOR_DECIDED, [
+    nightAdvisors[3],
+    'CARERS',
+    addDays(today, 5),
+    addDays(today, 5),
+    8,
+    'APPROVED',
+    'Hospital appointment for a parent',
+    tlNightId,
+    nowStamp(),
+  ]);
+
   await db.run(TOR_DECIDED, [
     nightAdvisors[4],
     'SICK',
