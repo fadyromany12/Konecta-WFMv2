@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useAsync, useSession } from '../state';
-import { Banner, Button, Card, Chip, DateField, Empty, Loading, Toolbar } from '../components/ui';
+import { useToast } from '../components/Toast';
+import { Button, Card, Chip, DateField, Empty, Loading, SkeletonTable, Toolbar } from '../components/ui';
 import { addDays, today } from '../lib/time';
 
 /**
@@ -11,7 +12,7 @@ import { addDays, today } from '../lib/time';
  */
 export function Absence() {
   const { user } = useSession();
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
+  const toast = useToast();
 
   const accruals = useAsync(() => api.get<{ accruals: any[] }>('/absence/accruals'), []);
   const requests = useAsync(() => api.get<{ requests: any[] }>('/absence/requests'), []);
@@ -24,7 +25,6 @@ export function Absence() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setFlash(null);
     try {
       await api.post('/absence/requests', {
         accrualType: type,
@@ -33,28 +33,33 @@ export function Absence() {
         hours,
         reason: reason || undefined,
       });
-      setFlash({ tone: 'good', text: 'Request submitted for approval.' });
+      toast.success('Request submitted for approval.', 'Your balance moves only once it is approved.');
       setReason('');
       requests.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      // Almost always "you asked for more than you have accrued", which is the
+      // one message an advisor actually needs to read.
+      toast.error((err as Error).message);
     }
   }
 
   async function decide(id: number, status: 'APPROVED' | 'DECLINED') {
     try {
       await api.post(`/absence/requests/${id}/decision`, { status });
+      toast.success(
+        status === 'APPROVED' ? 'Time off approved.' : 'Request declined.',
+        status === 'APPROVED' ? 'The hours have come off their balance.' : 'Their balance is unchanged.',
+      );
       requests.reload();
       accruals.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
   return (
     <div className="grid-2">
       <Card title="Request time off" subtitle="Checked against your accrued balance when you submit.">
-        {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
         <form onSubmit={submit}>
           <Toolbar>
             <label className="field">
@@ -107,7 +112,7 @@ export function Absence() {
       </Card>
 
       <Card title={user?.isSupervisor ? 'Team requests' : 'Your requests'}>
-        {requests.loading && <Loading what="requests" />}
+        {requests.loading && !requests.data && <SkeletonTable rows={5} columns={6} />}
         {requests.data?.requests.length === 0 && <Empty>No requests.</Empty>}
         <div className="table-scroll">
           <table>

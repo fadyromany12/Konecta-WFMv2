@@ -14,6 +14,7 @@ import { addDays, diffMinutes, nowStamp, todayStr, type DateStr, type Stamp } fr
 import { effectiveShiftRule, getUser } from './people.js';
 import { getShifts } from './scheduling.js';
 import { generateTimecard } from './timecards.js';
+import { emit, notify, supervisorsOf } from './events.js';
 
 export interface ClockState {
   clockedOn: boolean;
@@ -225,9 +226,33 @@ export function punch(params: {
 
   // Flag lateness at the moment it happens rather than the next morning.
   let note = '';
+  let lateMinutes = 0;
   if (type === 'ON' && after.scheduledStart) {
     const late = diffMinutes(after.scheduledStart, now);
-    if (late > rule.lateGraceMinutes) note = ` You are ${late} minutes late; a Late exception has been raised.`;
+    if (late > rule.lateGraceMinutes) {
+      lateMinutes = late;
+      note = ` You are ${late} minutes late; a Late exception has been raised.`;
+    }
+  }
+
+  // Push the punch to anyone watching the live board, so the intraday picture
+  // is right the moment it changes rather than at the next poll.
+  emit('punch', userId, `${user?.name ?? 'Someone'} ${verb.toLowerCase().replace(/\.$/, '')}`, {
+    type,
+    activity: params.activity ?? null,
+    payrollDate,
+    lateMinutes,
+  });
+
+  // Lateness is the one punch worth interrupting a supervisor for: it is still
+  // fixable while the shift is running and useless information the next day.
+  if (lateMinutes > 0) {
+    notify(
+      supervisorsOf(userId),
+      'Late start',
+      `${user?.name ?? `#${userId}`} clocked on ${lateMinutes} minutes late at ${now.slice(11)}.`,
+      'WARN',
+    );
   }
 
   return { ok: true, message: verb + note, state: after };

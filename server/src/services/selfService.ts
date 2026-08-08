@@ -12,6 +12,13 @@ import { addDays, type DateStr } from '../domain/time.js';
 import { getShifts, saveShifts } from './scheduling.js';
 import { placeholders } from './people.js';
 import { generateTimecard } from './timecards.js';
+import { emit, notify, supervisorsOf } from './events.js';
+
+/** Name for a user id, for notification copy. Falls back to the id. */
+function nameOf(userId: number): string {
+  const row = db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as { name: string } | undefined;
+  return row?.name ?? `#${userId}`;
+}
 
 export interface SwapRequest {
   id: number;
@@ -89,6 +96,20 @@ export function requestSwap(params: {
     )
     .run(requesterId, requesterDate, counterpartyId, counterpartyDate, params.reason ?? null);
 
+  // The counterparty is the only person who can move this forward, so they are
+  // the only person told about it at this stage.
+  const requester = nameOf(requesterId);
+  notify(
+    [counterpartyId],
+    'Shift swap requested',
+    `${requester} would like your ${counterpartyDate} shift and offers theirs on ${requesterDate}.` +
+      (params.reason ? ` Reason: ${params.reason}` : ''),
+  );
+  emit('swap.changed', counterpartyId, `${requester} asked ${nameOf(counterpartyId)} for a shift swap`, {
+    swapId: Number(info.lastInsertRowid),
+    status: 'PENDING_PEER',
+  });
+
   return {
     ok: true,
     id: Number(info.lastInsertRowid),
@@ -111,6 +132,26 @@ export function respondToSwap(
     accept ? 'PENDING_APPROVAL' : 'DECLINED',
     id,
   );
+
+  const responder = nameOf(userId);
+  const requester = nameOf(swap.requester_id);
+  if (accept) {
+    // The queue moves to the supervisors: tell whoever can now act on it.
+    const approvers = [...new Set([...supervisorsOf(swap.requester_id), ...supervisorsOf(userId)])];
+    notify(
+      approvers,
+      'Shift swap needs approval',
+      `${requester} and ${responder} have agreed to swap ${swap.requester_date} for ${swap.counterparty_date}.`,
+    );
+    notify([swap.requester_id], 'Swap accepted', `${responder} accepted. It is now with your supervisor.`);
+  } else {
+    notify([swap.requester_id], 'Swap declined', `${responder} declined the swap you asked for.`, 'WARN');
+  }
+  emit('swap.changed', swap.requester_id, `${responder} ${accept ? 'accepted' : 'declined'} a swap with ${requester}`, {
+    swapId: id,
+    status: accept ? 'PENDING_APPROVAL' : 'DECLINED',
+  });
+
   return {
     ok: true,
     message: accept ? 'Accepted. It now needs supervisor approval.' : 'Swap declined.',
@@ -137,6 +178,16 @@ export function decideSwap(
     db.prepare(
       "UPDATE shift_swaps SET status = 'DECLINED', decided_by = ?, decided_at = datetime('now') WHERE id = ?",
     ).run(actorId, id);
+    notify(
+      [swap.requester_id, swap.counterparty_id],
+      'Swap not approved',
+      `${nameOf(actorId)} did not approve the ${swap.requester_date} / ${swap.counterparty_date} swap. Both schedules are unchanged.`,
+      'WARN',
+    );
+    emit('swap.changed', swap.requester_id, `${nameOf(actorId)} declined a shift swap`, {
+      swapId: id,
+      status: 'DECLINED',
+    });
     return { ok: true, message: 'Swap declined.' };
   }
 
@@ -186,6 +237,28 @@ export function decideSwap(
   ] as [number, string][]) {
     generateTimecard({ userId, date, actorId, force: true });
   }
+
+  // Both advisors now work a different day from the one they planned for, which
+  // is the kind of thing worth being told twice.
+  notify(
+    [swap.requester_id],
+    'Swap approved',
+    `Your ${swap.requester_date} shift has moved to ${swap.counterparty_date}.`,
+  );
+  notify(
+    [swap.counterparty_id],
+    'Swap approved',
+    `Your ${swap.counterparty_date} shift has moved to ${swap.requester_date}.`,
+  );
+  emit(
+    'swap.changed',
+    swap.requester_id,
+    `${nameOf(swap.requester_id)} and ${nameOf(swap.counterparty_id)} swapped shifts`,
+    { swapId: id, status: 'APPROVED' },
+  );
+  emit('schedule.changed', swap.counterparty_id, `${nameOf(swap.counterparty_id)}'s schedule changed by swap`, {
+    date: swap.requester_date,
+  });
 
   return { ok: true, message: 'Swap approved and both schedules updated.' };
 }
@@ -243,6 +316,28 @@ export function createOffer(params: {
       params.actorId,
     );
   audit(params.actorId, 'extra_hours', Number(info.lastInsertRowid), 'OFFER', params);
+
+  // An offer nobody hears about is not an offer. Everyone on the project who
+  // could work it is told, once.
+  const advisors = (
+    db
+      .prepare("SELECT id FROM users WHERE project_id = ? AND role = 'ADVISOR' AND status = 'ACTIVE'")
+      .all(params.projectId) as { id: number }[]
+  ).map((r) => r.id);
+  notify(
+    advisors,
+    'Extra hours available',
+    `${params.startTime}–${params.endTime} on ${params.date}, ${params.slots} slot${params.slots === 1 ? '' : 's'}.` +
+      (params.note ? ` ${params.note.replace(/\.?$/, '.')}` : '') +
+      ' Bid under My Shifts → Extra Hours.',
+  );
+  for (const advisorId of advisors) {
+    emit('extra-hours.changed', advisorId, `Extra hours offered on ${params.date}`, {
+      offerId: Number(info.lastInsertRowid),
+      date: params.date,
+    });
+  }
+
   return { ok: true, id: Number(info.lastInsertRowid) };
 }
 
@@ -256,6 +351,10 @@ export function placeBid(offerId: number, userId: number): { ok: boolean; messag
   } catch {
     return { ok: false, message: 'You have already bid for this one.' };
   }
+  emit('extra-hours.changed', userId, `${nameOf(userId)} bid for extra hours on ${offer.date}`, {
+    offerId,
+    date: offer.date,
+  });
   return { ok: true, message: 'Bid placed. You will be told if it is awarded.' };
 }
 
@@ -309,6 +408,19 @@ export function awardBid(bidId: number, actorId: number): { ok: boolean; message
   }
   audit(actorId, 'extra_hours', bid.offer_id, 'AWARD', { userId: bid.user_id, date: bid.date });
   generateTimecard({ userId: bid.user_id, date: bid.date, actorId });
+
+  notify(
+    [bid.user_id],
+    'Extra hours awarded',
+    `You have ${bid.start_time}–${bid.end_time} on ${bid.date}. It is on your schedule, so you can clock on for it.`,
+  );
+  emit('extra-hours.changed', bid.user_id, `${nameOf(bid.user_id)} was awarded extra hours on ${bid.date}`, {
+    offerId: bid.offer_id,
+    date: bid.date,
+  });
+  emit('schedule.changed', bid.user_id, `${nameOf(bid.user_id)}'s schedule gained extra hours`, {
+    date: bid.date,
+  });
 
   return { ok: true, message: 'Awarded. The extra hours are on their schedule and they can clock on.' };
 }

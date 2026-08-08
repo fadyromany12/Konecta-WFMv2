@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { api } from './routes/index.js';
 import { planning } from './routes/planning.js';
+import { events } from './routes/events.js';
 import { errorHandler, notFound } from './middleware/errors.js';
 import { PRODUCT } from './domain/reference.js';
 import { db, IS_MEMORY } from './db/index.js';
@@ -35,12 +36,14 @@ export function createApp(): Express {
 
   app.use('/api', api);
   app.use('/api', planning);
+  app.use('/api', events);
   // A platform rewrite can deliver the request with the /api prefix already
   // stripped, so the same router is mounted at the root as well. Harmless in a
   // single-process deployment, and it keeps routing independent of how the
   // request was rewritten on the way in.
   app.use(api);
   app.use(planning);
+  app.use(events);
 
   // In a single-process deployment the API also serves the built front end.
   // On Vercel the static files are served by the platform and this is skipped.

@@ -58,6 +58,23 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   }
 }
 
+/**
+ * The same check, but willing to read the token from the query string.
+ *
+ * `EventSource` cannot set request headers, so a browser has no way to send a
+ * bearer token on an SSE connection. Putting a credential in a URL is worse
+ * than putting it in a header — URLs end up in access logs and referrers — so
+ * this is deliberately not the default: only the read-only event stream uses
+ * it, and the token it accepts is the same short-lived session token that
+ * expires in twelve hours.
+ */
+export function authenticateStream(req: Request, res: Response, next: NextFunction): void {
+  if (!req.headers.authorization && typeof req.query.token === 'string') {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  authenticate(req, res, next);
+}
+
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user || !roles.includes(req.user.role)) {

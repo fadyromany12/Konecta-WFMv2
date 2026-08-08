@@ -2,7 +2,18 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAsync, useSession } from '../state';
-import { Banner, Button, Card, Chip, Empty, GroupPicker, Loading, Toolbar } from '../components/ui';
+import { useLive, useLiveEvent } from '../live';
+import {
+  Banner,
+  Button,
+  Card,
+  Chip,
+  Empty,
+  GroupPicker,
+  SkeletonChart,
+  SkeletonKpis,
+  Toolbar,
+} from '../components/ui';
 import { CoverageChart, Gauge } from '../components/charts';
 import { Home } from './Home';
 import { today } from '../lib/time';
@@ -60,8 +71,11 @@ export function Dashboard() {
 function CommandCentre() {
   const { groups } = useSession();
   const navigate = useNavigate();
+  const { connected } = useLive();
   const [group, setGroup] = useState('');
   const [tick, setTick] = useState(0);
+  /** Set briefly when a push arrives, so the change is visible as movement. */
+  const [pulsed, setPulsed] = useState(false);
 
   useEffect(() => {
     if (!group && groups.length > 0) {
@@ -69,12 +83,25 @@ function CommandCentre() {
     }
   }, [groups, group]);
 
-  // The whole value of this screen is that it is current, so it refreshes
-  // itself rather than waiting to be reloaded.
+  // A punch or an approval changes this screen, so it redraws the moment one
+  // lands rather than up to half a minute later.
+  useLiveEvent(['punch', 'timecard.approved', 'schedule.changed'], () => {
+    setTick((t) => t + 1);
+    setPulsed(true);
+  });
+
   useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), 30000);
+    if (!pulsed) return;
+    const timer = setTimeout(() => setPulsed(false), 1200);
+    return () => clearTimeout(timer);
+  }, [pulsed]);
+
+  // The poll stays as a floor. When the stream is up it is a slow safety net;
+  // when the stream cannot run at all it is the only thing keeping this honest.
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), connected ? 120000 : 30000);
     return () => clearInterval(timer);
-  }, []);
+  }, [connected]);
 
   const live = useAsync(
     () =>
@@ -102,14 +129,15 @@ function CommandCentre() {
       <Toolbar>
         <GroupPicker groups={groups} value={group} onChange={setGroup} />
         <div style={{ flex: 1 }} />
-        <span className="muted">
+        <span className={`live-badge ${connected ? 'is-live' : ''} ${pulsed ? 'pulsed' : ''}`}>
           <span className="live-dot" />
-          Live · updated {live.data?.at.slice(11) ?? '—'} · refreshes every 30s
+          {connected ? 'Live' : 'Periodic'} · updated {live.data?.at.slice(11) ?? '—'}
+          <span className="muted"> · {connected ? 'pushed as it happens' : 'every 30s'}</span>
         </span>
         <Button onClick={() => setTick((t) => t + 1)}>Refresh now</Button>
       </Toolbar>
 
-      {live.loading && !live.data && <Loading what="the live picture" />}
+      {live.loading && !live.data && <SkeletonKpis count={5} />}
       {live.error && <Banner tone="error">{live.error}</Banner>}
 
       {totals && (
@@ -206,7 +234,7 @@ function CommandCentre() {
         subtitle="Bars are scheduled headcount, the line is what the forecast asks for."
         actions={<Button onClick={() => navigate('/scheduling/forecast')}>Open planning</Button>}
       >
-        {coverage.loading && !coverage.data && <Loading what="coverage" />}
+        {coverage.loading && !coverage.data && <SkeletonChart height={220} />}
         {daytime.length === 0 && !coverage.loading && (
           <Empty>No forecast loaded for today. Add volumes under Scheduling → Forecast &amp; Coverage.</Empty>
         )}

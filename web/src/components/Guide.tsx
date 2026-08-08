@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { ROLE_GUIDES, TAB_GUIDES, guideForPath, roleGuide } from '../content/guide';
+import { GETTING_AROUND, ROLE_GUIDES, TAB_GUIDES, guideForPath, roleGuide } from '../content/guide';
 import { useSession } from '../state';
 
 const SEEN_KEY = 'pulse.guide.seen';
@@ -86,8 +86,14 @@ export function GuideDrawer({ open, onClose }: { open: boolean; onClose: () => v
 
           {!showAll && !tab && <p className="empty">No specific guidance for this screen yet.</p>}
 
+          {/* These work everywhere, so they belong beside every screen's guide
+              rather than inside one of them. */}
+          {!showAll && <GettingAround />}
+
           {showAll && (
             <>
+              <GettingAround />
+
               <Section title="Roles">
                 {ROLE_GUIDES.map((role) => (
                   <RoleCard key={role.role} guide={role} heading={role.label} compact />
@@ -121,6 +127,21 @@ export function GuideDrawer({ open, onClose }: { open: boolean; onClose: () => v
         </footer>
       </aside>
     </>
+  );
+}
+
+function GettingAround() {
+  return (
+    <Section title="Getting around">
+      <ol className="guide-steps">
+        {GETTING_AROUND.map((step) => (
+          <li key={step.title}>
+            <strong>{step.title}</strong>
+            <span>{step.body}</span>
+          </li>
+        ))}
+      </ol>
+    </Section>
   );
 }
 

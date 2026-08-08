@@ -10,6 +10,8 @@ import {
   type TimecardRow,
 } from '../api';
 import { useAsync, useSession } from '../state';
+import { useLiveEvent } from '../live';
+import { useToast } from '../components/Toast';
 import {
   Banner,
   Button,
@@ -21,6 +23,7 @@ import {
   GroupPicker,
   Issues,
   Loading,
+  SkeletonTable,
   Stamp,
   Stat,
   TimeInput,
@@ -53,10 +56,13 @@ export function TimeAttendance() {
 function PayrollSummary() {
   const { groups, user } = useSession();
   const navigate = useNavigate();
+  const toast = useToast();
   const [group, setGroup] = useState('');
   const [start, setStart] = useState(addDays(today(), -3));
   const [end, setEnd] = useState(today());
-  const [flash, setFlash] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  /** Rows whose approval is in flight, shown as approved before the server says so. */
+  const [optimistic, setOptimistic] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!group && groups.length > 0) {
@@ -74,23 +80,88 @@ function PayrollSummary() {
     [group, start, end],
   );
 
+  // Somebody else approving a card, or an advisor clocking off, changes what is
+  // on this screen. Refresh when it happens rather than when it is noticed.
+  useLiveEvent(['timecard.approved', 'timecard.saved', 'punch'], () => summary.reload());
+
+  /**
+   * Approval, applied to the checkbox immediately and rolled back if the server
+   * refuses. The refusals here are real — a card with errors, a shift still
+   * running — so the rollback has to be visible, not silent.
+   */
   async function toggleApproval(row: PayrollSummaryRow, approved: boolean) {
-    setFlash(null);
+    const key = `${row.userId}-${row.payrollDate}`;
+    setOptimistic((current) => ({ ...current, [key]: approved }));
     try {
       const res = await api.post<{ ok: boolean; message: string }>(
         `/timecards/${row.userId}/${row.payrollDate}/approve`,
         { approved },
       );
-      setFlash(res.message);
+      if (res.ok) toast.success(res.message, `${row.name} · ${row.payrollDate}`);
+      else {
+        setOptimistic((current) => ({ ...current, [key]: !approved }));
+        toast.warn(res.message, `${row.name} · ${row.payrollDate}`);
+      }
       summary.reload();
     } catch (err) {
-      setFlash((err as Error).message);
+      // Put the checkbox back where the user found it, and say why.
+      setOptimistic((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      toast.error((err as Error).message, `${row.name} · ${row.payrollDate}`);
     }
   }
 
-  const rows = summary.data?.rows ?? [];
+  /** Approve everything the server judges clean. It decides, not this screen. */
+  async function approveClean() {
+    setBusy(true);
+    try {
+      const res = await api.post<{
+        approved: string[];
+        skipped: { name: string; date: string; reason: string }[];
+        message: string;
+      }>('/payroll/approve-clean', { group, start, end });
+
+      if (res.approved.length === 0) {
+        toast.warn(res.message, 'Every remaining card needs a person to look at it.');
+      } else {
+        toast.success(
+          res.message,
+          res.skipped.length > 0
+            ? res.skipped
+                .slice(0, 4)
+                .map((s) => `${s.name} ${s.date}: ${s.reason}`)
+                .join(' · ')
+            : undefined,
+        );
+      }
+      setOptimistic({});
+      summary.reload();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const rows = (summary.data?.rows ?? []).map((row) => {
+    const pendingChange = optimistic[`${row.userId}-${row.payrollDate}`];
+    return pendingChange === undefined ? row : { ...row, approved: pendingChange };
+  });
   const pending = rows.filter((r) => !r.approved && !r.inProgress).length;
   const withExceptions = rows.filter((r) => r.exceptions.length > 0).length;
+  // The same test the server applies, so the button's count is honest.
+  const cleanCount = rows.filter(
+    (r) =>
+      !r.approved &&
+      !r.inProgress &&
+      !r.hasErrors &&
+      !r.assumedOff &&
+      r.exceptions.length === 0 &&
+      r.payrollDate < today(),
+  ).length;
 
   return (
     <>
@@ -99,6 +170,14 @@ function PayrollSummary() {
         <DateField label="Start" value={start} onChange={setStart} />
         <DateField label="End" value={end} onChange={setEnd} />
         <Button onClick={() => summary.reload()}>Go</Button>
+        <Button
+          variant="primary"
+          onClick={approveClean}
+          disabled={busy || cleanCount === 0}
+          title="Approves only cards with no exceptions, no errors, a real clock-off and a finished day"
+        >
+          {busy ? 'Approving…' : `Approve ${cleanCount} clean`}
+        </Button>
         <div style={{ flex: 1 }} />
         <div className="stats">
           <Stat label="Timecards" value={rows.length} />
@@ -107,15 +186,15 @@ function PayrollSummary() {
         </div>
       </Toolbar>
 
-      {flash && <Banner tone="info">{flash}</Banner>}
       {user && (
         <p className="muted" style={{ marginBottom: '0.6rem' }}>
           Your edit window is {user.editWindowDays} days. Cards older than that must go to your Operations Manager.
+          Bulk approval deliberately skips anything carrying an exception — those are the ones worth reading.
         </p>
       )}
 
       <Card>
-        {summary.loading && <Loading what="payroll summary" />}
+        {summary.loading && !summary.data && <SkeletonTable rows={7} columns={9} />}
         {summary.error && <Banner tone="error">{summary.error}</Banner>}
         {!summary.loading && rows.length === 0 && <Empty>No timecards in that range.</Empty>}
 
@@ -203,11 +282,11 @@ function TimecardEditor() {
   const { userId, date } = useParams();
   const { catalog, user } = useSession();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [rows, setRows] = useState<TimecardRow[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error' | 'warn'; text: string } | null>(null);
   const [saveIssues, setSaveIssues] = useState<any[]>([]);
 
   const loaded = useAsync(
@@ -277,7 +356,6 @@ function TimecardEditor() {
   }
 
   async function save() {
-    setFlash(null);
     setSaveIssues([]);
     try {
       const res = await api.put<{ ok: boolean; issues: any[]; decision: EditDecision }>(
@@ -285,37 +363,44 @@ function TimecardEditor() {
         { rows: rows.map(({ id: _id, ...rest }) => rest) },
       );
       setSaveIssues(res.issues);
-      setFlash({
-        tone: res.decision.postPayroll ? 'warn' : 'good',
-        text: res.decision.postPayroll
-          ? 'Saved as a post-payroll correction. It transfers on the next payroll run.'
-          : 'Timecard saved.',
-      });
+      if (res.decision.postPayroll) {
+        toast.warn(
+          'Saved as a post-payroll correction.',
+          'It transfers on the next payroll run rather than this one.',
+        );
+      } else {
+        toast.success('Timecard saved.', `${card?.userName ?? ''} · ${date}`);
+      }
       setDirty(false);
       loaded.reload();
     } catch (err: any) {
+      // The issues list is the useful part of a refusal; the toast is the part
+      // that makes sure it was noticed.
       setSaveIssues(err.body?.issues ?? []);
-      setFlash({ tone: 'error', text: err.message });
+      toast.error(err.message, 'Nothing was saved — the card is unchanged on the server.');
     }
   }
 
   async function approve(next: boolean) {
     try {
-      const res = await api.post<{ message: string }>(`/timecards/${userId}/${date}/approve`, { approved: next });
-      setFlash({ tone: 'good', text: res.message });
+      const res = await api.post<{ ok: boolean; message: string }>(`/timecards/${userId}/${date}/approve`, {
+        approved: next,
+      });
+      if (res.ok) toast.success(res.message);
+      else toast.warn(res.message);
       loaded.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
   async function rebuild() {
     try {
       await api.post(`/timecards/${userId}/${date}/rebuild`);
-      setFlash({ tone: 'good', text: 'Rebuilt from the punch record. Any manual edits were discarded.' });
+      toast.success('Rebuilt from the punch record.', 'Any manual edits to this card were discarded.');
       loaded.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
@@ -360,8 +445,6 @@ function TimecardEditor() {
           </>
         }
       >
-        {flash && <Banner tone={flash.tone === 'warn' ? 'warn' : flash.tone === 'error' ? 'error' : 'good'}>{flash.text}</Banner>}
-
         {decision && !decision.allowed && <Banner tone="error">{decision.reason}</Banner>}
         {decision?.postPayroll && decision.allowed && <Banner tone="warn">{decision.reason}</Banner>}
         {card.approved && <Banner tone="good">Approved by {card.approvedBy} at {card.approvedAt}. Remove the approval to edit.</Banner>}

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAsync, useSession } from '../state';
+import { useLiveEvent } from '../live';
+import { useToast } from '../components/Toast';
 import {
   Banner,
   Button,
@@ -9,7 +11,7 @@ import {
   DateField,
   Empty,
   GroupPicker,
-  Loading,
+  SkeletonChart,
   Stat,
   Toolbar,
 } from '../components/ui';
@@ -49,9 +51,9 @@ interface ForecastResponse {
  */
 export function Planning() {
   const { groups } = useSession();
+  const toast = useToast();
   const [group, setGroup] = useState('');
   const [date, setDate] = useState(today());
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error' | 'warn'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
 
@@ -71,21 +73,24 @@ export function Planning() {
 
   const daytime = useMemo(() => (data.data?.coverage ?? []).filter((c) => c.volume > 0), [data.data]);
 
+  // Coverage is a function of the roster, so anything that moves a shift makes
+  // this chart stale the moment it happens.
+  useLiveEvent(['schedule.changed', 'swap.changed', 'extra-hours.changed'], () => setNonce((n) => n + 1));
+
   async function runAutoSchedule() {
     setBusy(true);
-    setFlash(null);
     try {
       const res = await api.post<any>('/forecast/auto-schedule', { date });
-      setFlash({
-        tone: res.created.length > 0 ? 'good' : 'warn',
-        text:
-          `Drafted ${res.created.length} shift${res.created.length === 1 ? '' : 's'}. ` +
-          `Short intervals went from ${res.before.understaffedIntervals} to ${res.after.understaffedIntervals}.` +
-          (res.skipped.length > 0 ? ` ${res.skipped.length} advisor(s) skipped.` : ''),
-      });
+      const headline =
+        `Drafted ${res.created.length} shift${res.created.length === 1 ? '' : 's'} for ${date}.`;
+      const detail =
+        `Short intervals went from ${res.before.understaffedIntervals} to ${res.after.understaffedIntervals}.` +
+        (res.skipped.length > 0 ? ` ${res.skipped.length} advisor(s) skipped.` : '');
+      if (res.created.length > 0) toast.success(headline, detail);
+      else toast.warn('Nothing could be drafted.', detail);
       setNonce((n) => n + 1);
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -127,9 +132,12 @@ export function Planning() {
         )}
       </Toolbar>
 
-      {flash && <Banner tone={flash.tone === 'warn' ? 'warn' : flash.tone}>{flash.text}</Banner>}
       {data.error && <Banner tone="error">{data.error}</Banner>}
-      {data.loading && !data.data && <Loading what="forecast" />}
+      {data.loading && !data.data && (
+        <Card title="Cover against requirement">
+          <SkeletonChart height={250} />
+        </Card>
+      )}
 
       {settings && (
         <p className="muted" style={{ marginBottom: '0.8rem' }}>

@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { SessionProvider } from './state';
+import { LiveProvider } from './live';
+import { ToastProvider } from './components/Toast';
 import './styles.css';
 import { initTheme } from './theme';
 
@@ -32,7 +34,13 @@ createRoot(document.getElementById('root')!).render(
     <Backdrop />
     <BrowserRouter>
       <SessionProvider>
-        <App />
+        {/* Live sits inside Session because it needs the signed-in user, and
+            Toast wraps the app so any screen can confirm what it just did. */}
+        <LiveProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </LiveProvider>
       </SessionProvider>
     </BrowserRouter>
   </StrictMode>,

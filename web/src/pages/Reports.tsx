@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useSearchParams } from 'react-router-dom';
 import { SubTabs } from '../App';
 import { api, type AdherenceResponse, type Person } from '../api';
 import { useAsync, useSession } from '../state';
@@ -49,13 +49,27 @@ export function Reports() {
  */
 function PulseReport() {
   const { groups, user } = useSession();
+  const [params, setParams] = useSearchParams();
   const [group, setGroup] = useState('');
-  const [personId, setPersonId] = useState<number | null>(null);
+  // ?userId= is how the command palette gets you straight to one advisor.
+  const [personId, setPersonId] = useState<number | null>(
+    params.get('userId') ? Number(params.get('userId')) : null,
+  );
   const [date, setDate] = useState(addDays(today(), -1));
 
   useEffect(() => {
     if (!group && groups.length > 0) setGroup(groups.find((g) => g.type === 'SYSTEM')?.key ?? groups[0].key);
   }, [groups, group]);
+
+  useEffect(() => {
+    const requested = params.get('userId');
+    if (requested && Number(requested) !== personId) setPersonId(Number(requested));
+  }, [params, personId]);
+
+  function choosePerson(id: number) {
+    setPersonId(id);
+    setParams({ userId: String(id) }, { replace: true });
+  }
 
   const people = useAsync(
     () =>
@@ -90,7 +104,7 @@ function PulseReport() {
             <GroupPicker groups={groups} value={group} onChange={setGroup} />
             <label className="field">
               <span>Advisor</span>
-              <select value={personId ?? ''} onChange={(e) => setPersonId(Number(e.target.value))}>
+              <select value={personId ?? ''} onChange={(e) => choosePerson(Number(e.target.value))}>
                 {people.data?.people.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}

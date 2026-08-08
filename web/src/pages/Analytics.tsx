@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAsync, useSession } from '../state';
-import { Banner, Card, DateField, Empty, GroupPicker, Loading, Stat, Toolbar, Chip } from '../components/ui';
+import { Banner, Card, DateField, Empty, GroupPicker, SkeletonChart, SkeletonTable, Stat, Toolbar, Chip } from '../components/ui';
 import { BarList, LineChart } from '../components/charts';
 import { addDays, today } from '../lib/time';
 
@@ -118,7 +118,16 @@ export function Analytics() {
       </Toolbar>
 
       {data.error && <Banner tone="error">{data.error}</Banner>}
-      {data.loading && !result && <Loading what="analytics" />}
+      {data.loading && !result && (
+        <>
+          <Card title="Adherence over time">
+            <SkeletonChart height={200} />
+          </Card>
+          <Card title="Advisor scorecards">
+            <SkeletonTable rows={6} columns={10} />
+          </Card>
+        </>
+      )}
       {result && trend.length === 0 && (
         <Card>
           <Empty>No worked time in that range.</Empty>

@@ -3,7 +3,8 @@ import { Route, Routes } from 'react-router-dom';
 import { SubTabs } from '../App';
 import { api, type Person } from '../api';
 import { useAsync, useSession } from '../state';
-import { Banner, Button, Card, Chip, DateField, Empty, GroupPicker, Loading, Toolbar } from '../components/ui';
+import { useToast } from '../components/Toast';
+import { Button, Card, Chip, DateField, Empty, GroupPicker, Loading, SkeletonTable, Toolbar } from '../components/ui';
 import { addDays, today } from '../lib/time';
 
 export function Admin() {
@@ -30,10 +31,10 @@ export function Admin() {
 /** Who you can see, and the custom groups you have built out of them. */
 function DetailsOfWho() {
   const { groups, refreshGroups } = useSession();
+  const toast = useToast();
   const [group, setGroup] = useState('');
   const [checked, setChecked] = useState<number[]>([]);
   const [name, setName] = useState('');
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     if (!group && groups.length > 0) setGroup(groups.find((g) => g.type === 'SYSTEM')?.key ?? groups[0].key);
@@ -47,15 +48,14 @@ function DetailsOfWho() {
   const current = groups.find((g) => g.key === group);
 
   async function createGroup() {
-    setFlash(null);
     try {
       await api.post('/admin/groups', { name, userIds: checked });
-      setFlash({ tone: 'good', text: `Custom group -${name} created.` });
+      toast.success(`Custom group -${name} created.`, `${checked.length} people. It is now in every group picker.`);
       setName('');
       setChecked([]);
       await refreshGroups();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
@@ -63,11 +63,11 @@ function DetailsOfWho() {
     if (!current || current.type !== 'CUSTOM') return;
     try {
       await api.del(`/admin/groups/${encodeURIComponent(current.key.replace(/^-/, ''))}`);
-      setFlash({ tone: 'good', text: `Deleted ${current.key}.` });
+      toast.success(`Deleted ${current.key}.`, 'The people in it are untouched — only the grouping is gone.');
       setGroup('');
       await refreshGroups();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
@@ -90,13 +90,11 @@ function DetailsOfWho() {
         </Button>
       </Toolbar>
 
-      {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
-
       <Card
         title={current?.name ?? 'People'}
         subtitle="Groups prefixed -- come from the reporting hierarchy, - are your own, ALT_ are delegated to you."
       >
-        {people.loading && <Loading what="people" />}
+        {people.loading && !people.data && <SkeletonTable rows={6} columns={8} />}
         {people.data?.people.length === 0 && !people.loading && <Empty>No employees in this group.</Empty>}
         <div className="table-scroll">
           <table>
@@ -149,11 +147,11 @@ function DetailsOfWho() {
 /** Shift rules, which may only ever be changed with effect from a future date. */
 function SupervisorAdmin() {
   const { groups, catalog } = useSession();
+  const toast = useToast();
   const [group, setGroup] = useState('');
   const [personId, setPersonId] = useState<number | null>(null);
   const [rule, setRule] = useState('CR1');
   const [effective, setEffective] = useState(addDays(today(), 14));
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     if (!group && groups.length > 0) setGroup(groups.find((g) => g.type === 'SYSTEM')?.key ?? groups[0].key);
@@ -175,17 +173,16 @@ function SupervisorAdmin() {
   );
 
   async function save() {
-    setFlash(null);
     try {
       const res = await api.post<{ message: string }>('/admin/shift-rule', {
         userId: personId,
         shiftRule: rule,
         effectiveDate: effective,
       });
-      setFlash({ tone: 'good', text: res.message });
+      toast.success(res.message, 'Time already worked is still judged by the old rule.');
       detail.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
@@ -204,8 +201,6 @@ function SupervisorAdmin() {
           </select>
         </label>
       </Toolbar>
-
-      {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
 
       <div className="grid-2">
         <Card title="Default shift rule" subtitle="A change can only take effect from a future date.">
@@ -304,31 +299,34 @@ function SupervisorAdmin() {
 
 /** Delegation: exactly one alternate at a time, and it must be removed before reassigning. */
 function AlternateUser() {
+  const toast = useToast();
   const [employeeId, setEmployeeId] = useState('');
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
   const alternate = useAsync(() => api.get<any>('/admin/alternate'), []);
 
   async function assign() {
-    setFlash(null);
     try {
       const res = await api.post<{ message: string }>('/admin/alternate', { employeeId });
-      setFlash({ tone: 'good', text: res.message });
+      toast.success(res.message);
       setEmployeeId('');
       alternate.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
   async function remove() {
-    await api.del('/admin/alternate');
-    alternate.reload();
+    try {
+      await api.del('/admin/alternate');
+      toast.success('Alternate removed.', 'They can no longer see or manage your team.');
+      alternate.reload();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   }
 
   return (
     <div className="grid-2">
       <Card title="Assign an alternate" subtitle="Your alternate sees your team and your custom groups while assigned.">
-        {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
         <Toolbar>
           <label className="field">
             <span>Alternate employee ID</span>
@@ -391,7 +389,7 @@ function AuditTrail() {
           </select>
         </label>
       </Toolbar>
-      {audit.loading && <Loading what="audit trail" />}
+      {audit.loading && !audit.data && <SkeletonTable rows={8} columns={5} />}
       <div className="table-scroll">
         <table>
           <thead>

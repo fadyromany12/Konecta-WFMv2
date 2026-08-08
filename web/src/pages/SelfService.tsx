@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAsync, useSession } from '../state';
-import { Banner, Button, Card, Chip, DateField, Empty, Loading, Toolbar } from '../components/ui';
+import { useLiveEvent } from '../live';
+import { useToast } from '../components/Toast';
+import { Button, Card, Chip, DateField, Empty, SkeletonTable, Toolbar } from '../components/ui';
 import { TimeInput } from '../components/ui';
 import { addDays, today } from '../lib/time';
 
@@ -31,7 +33,7 @@ const SWAP_STATUS: Record<string, { label: string; tone: string }> = {
  */
 export function Swaps() {
   const { user } = useSession();
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
+  const toast = useToast();
   const [myDate, setMyDate] = useState(addDays(today(), 2));
   const [theirId, setTheirId] = useState<number | ''>('');
   const [theirDate, setTheirDate] = useState(addDays(today(), 3));
@@ -48,14 +50,18 @@ export function Swaps() {
     if (list.length > 0 && theirId === '') setTheirId(list[0].id);
   }, [candidates.data, theirId]);
 
+  // The other side of a swap moves without you doing anything, so this list
+  // has to follow the event rather than wait for a reload.
+  useLiveEvent(['swap.changed'], () => swaps.reload());
+
   async function act(fn: () => Promise<any>) {
-    setFlash(null);
     try {
       const res = await fn();
-      setFlash({ tone: 'good', text: res.message ?? 'Done.' });
+      if (res.ok === false) toast.warn(res.message ?? 'That could not be done.');
+      else toast.success(res.message ?? 'Done.');
       swaps.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
@@ -66,8 +72,6 @@ export function Swaps() {
 
   return (
     <>
-      {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
-
       <Card title="Request a swap" subtitle="Give one of your shifts and take one of theirs.">
         <Toolbar>
           <DateField label="My shift on" value={myDate} onChange={setMyDate} />
@@ -109,7 +113,7 @@ export function Swaps() {
       </Card>
 
       <Card title={user?.isSupervisor ? 'Team swaps' : 'Your swaps'}>
-        {swaps.loading && <Loading what="swaps" />}
+        {swaps.loading && !swaps.data && <SkeletonTable rows={4} columns={5} />}
         {(swaps.data?.swaps.length ?? 0) === 0 && !swaps.loading && <Empty>No swap requests.</Empty>}
         <div className="table-scroll">
           <table>
@@ -189,7 +193,7 @@ export function Swaps() {
  */
 export function ExtraHours() {
   const { user } = useSession();
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
+  const toast = useToast();
   const [openOffer, setOpenOffer] = useState<number | null>(null);
   const [date, setDate] = useState(addDays(today(), 4));
   const [startTime, setStartTime] = useState('18:00');
@@ -203,22 +207,26 @@ export function ExtraHours() {
     [openOffer],
   );
 
+  // A colleague bidding, or a supervisor awarding, changes this table.
+  useLiveEvent(['extra-hours.changed'], () => {
+    offers.reload();
+    bids.reload();
+  });
+
   async function act(fn: () => Promise<any>) {
-    setFlash(null);
     try {
       const res = await fn();
-      setFlash({ tone: 'good', text: res.message ?? 'Done.' });
+      if (res.ok === false) toast.warn(res.message ?? 'That could not be done.');
+      else toast.success(res.message ?? 'Done.');
       offers.reload();
       bids.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     }
   }
 
   return (
     <>
-      {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
-
       {user?.isSupervisor && (
         <Card title="Offer extra hours" subtitle="Post a block for the team to bid on.">
           <Toolbar>
@@ -267,7 +275,7 @@ export function ExtraHours() {
       )}
 
       <Card title="Open offers">
-        {offers.loading && <Loading what="offers" />}
+        {offers.loading && !offers.data && <SkeletonTable rows={4} columns={7} />}
         {(offers.data?.offers.length ?? 0) === 0 && !offers.loading && <Empty>Nothing on offer.</Empty>}
         <div className="table-scroll">
           <table>

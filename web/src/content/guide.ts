@@ -317,6 +317,38 @@ export const TAB_GUIDES: TabGuide[] = [
   },
 ];
 
+/**
+ * Getting around, as distinct from getting work done.
+ *
+ * These apply on every screen, so they are shown alongside whichever tab guide
+ * is open rather than buried in one of them.
+ */
+export const GETTING_AROUND: GuideStep[] = [
+  {
+    title: 'Search anything with ⌘K',
+    body:
+      'Ctrl-K off a Mac. Type a screen name, or an advisor’s name or employee ID to open their Pulse Report or ' +
+      'schedule directly — it saves picking a group and then a person on arrival.',
+  },
+  {
+    title: 'The bell shows what happened while you were away',
+    body:
+      'Late starts, swap requests waiting on you, extra hours awarded, schedule changes. The small dot under the ' +
+      'bell is lit when the app has a live connection; when it is grey the screens are refreshing on a timer instead, ' +
+      'which is slower but not wrong.',
+  },
+  {
+    title: 'Confirmations appear bottom right',
+    body:
+      'Anything you save says so there. A refusal stays until you dismiss it — if you did not see a message, the ' +
+      'action succeeded quietly.',
+  },
+  {
+    title: 'Press ? for this guide, Esc to close',
+    body: 'The guide always opens on the screen you are looking at.',
+  },
+];
+
 /** The guidance for whichever screen the user is on. */
 export function guideForPath(pathname: string): TabGuide | undefined {
   return TAB_GUIDES.find((g) => pathname.startsWith(g.path));

@@ -177,6 +177,75 @@ export function Loading({ what = 'data' }: { what?: string }) {
   return <p className="empty">Loading {what}…</p>;
 }
 
+/**
+ * Skeletons.
+ *
+ * "Loading forecast…" tells you nothing about what is coming; a shape that
+ * matches the thing you asked for tells you it is on its way and stops the
+ * layout jumping when it lands. Everything below is decorative, so it is hidden
+ * from assistive technology and announced once, in words, instead.
+ */
+export function SkeletonTable({ rows = 6, columns = 5 }: { rows?: number; columns?: number }) {
+  return (
+    <div className="skeleton-wrap" role="status" aria-label="Loading">
+      <div className="sr-only">Loading…</div>
+      {/* The rows carry their own flex column: the gap has to live on the
+          element that actually contains them, or they touch and read as one
+          solid block rather than as a table. */}
+      <div className="skeleton-rows" aria-hidden="true">
+        <div className="skeleton-row skeleton-head">
+          {Array.from({ length: columns }, (_, c) => (
+            <span key={c} className="skeleton-cell" />
+          ))}
+        </div>
+        {Array.from({ length: rows }, (_, r) => (
+          <div className="skeleton-row" key={r} style={{ animationDelay: `${r * 45}ms` }}>
+            {Array.from({ length: columns }, (_, c) => (
+              <span key={c} className="skeleton-cell" style={{ width: `${cellWidth(r, c)}%` }} />
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function SkeletonChart({ height = 200 }: { height?: number }) {
+  // Bars of varied height read as a chart arriving rather than a grey box.
+  const bars = [42, 66, 55, 78, 60, 88, 72, 95, 70, 58, 80, 48];
+  return (
+    <div className="skeleton-wrap" role="status" aria-label="Loading chart" style={{ height }}>
+      <div className="sr-only">Loading chart…</div>
+      <div className="skeleton-chart" aria-hidden="true">
+        {bars.map((h, i) => (
+          <span key={i} style={{ height: `${h}%`, animationDelay: `${i * 55}ms` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function SkeletonKpis({ count = 5 }: { count?: number }) {
+  return (
+    <div className="kpis" role="status" aria-label="Loading figures">
+      <div className="sr-only">Loading figures…</div>
+      {Array.from({ length: count }, (_, i) => (
+        <div className="kpi skeleton-kpi" key={i} aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}>
+          <span className="skeleton-cell" style={{ width: '60%', height: '0.6rem' }} />
+          <span className="skeleton-cell" style={{ width: '38%', height: '1.5rem' }} />
+          <span className="skeleton-cell" style={{ width: '72%', height: '0.55rem' }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Deterministic width jitter, so the placeholder does not look like a grid. */
+function cellWidth(row: number, column: number): number {
+  const seed = (row * 7 + column * 13) % 5;
+  return [92, 64, 78, 55, 85][seed];
+}
+
 export function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
   return (
     <div className={`stat ${tone ? `stat-${tone}` : ''}`}>

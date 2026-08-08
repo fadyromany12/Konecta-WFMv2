@@ -25,6 +25,7 @@ import {
 import { addDays, nowStamp, todayStr, type DateStr } from '../domain/time.js';
 import { effectiveShiftRule, getUser } from './people.js';
 import { getShifts } from './scheduling.js';
+import { emit, notify } from './events.js';
 
 export interface TimecardRecord {
   id: number;
@@ -351,6 +352,22 @@ export function setApproval(params: {
   ).run(approved ? 1 : 0, approved ? actorId : null, approved ? nowStamp() : null, record.id);
 
   audit(actorId, 'timecard', record.id, approved ? 'APPROVE' : 'UNAPPROVE', { userId, payrollDate: date });
+
+  const who = getUser(userId)?.name ?? `#${userId}`;
+  emit('timecard.approved', userId, `${who}'s ${date} timecard was ${approved ? 'approved' : 'unapproved'}`, {
+    payrollDate: date,
+    approved,
+  });
+  // An approval is what makes the day payable, so the advisor is told — and an
+  // approval being *removed* matters more to them, not less.
+  notify(
+    [userId],
+    approved ? 'Timecard approved' : 'Approval removed',
+    approved
+      ? `Your ${date} timecard has been approved and will go to payroll as it stands.`
+      : `The approval on your ${date} timecard was removed while it is looked at again.`,
+    approved ? 'INFO' : 'WARN',
+  );
 
   return {
     ok: true,

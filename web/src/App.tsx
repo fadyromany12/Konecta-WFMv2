@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './state';
 import { GuideDrawer, GuidePrompt } from './components/Guide';
 import { ThemeToggle } from './components/ThemeToggle';
+import { NotificationBell } from './components/Notifications';
+import { CommandPalette } from './components/CommandPalette';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { TimeAttendance } from './pages/TimeAttendance';
@@ -28,9 +30,16 @@ export function App() {
   const { user, catalog, loading, signOut } = useSession();
   const location = useLocation();
   const [guideOpen, setGuideOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const toggleGuide = useCallback(() => setGuideOpen((v) => !v), []);
+  const togglePalette = useCallback(() => setPaletteOpen((v) => !v), []);
+  const openGuide = useCallback(() => setGuideOpen(true), []);
 
   // The guide is reachable from anywhere with ?, not just the header button.
-  useHotkey('?', () => setGuideOpen((v) => !v));
+  useHotkey('?', toggleGuide);
+  // Cmd-K / Ctrl-K, the shortcut every user already has in their fingers.
+  useCommandKey(togglePalette);
 
   if (loading) {
     return (
@@ -54,10 +63,20 @@ export function App() {
           <span className="brand-sub">{catalog?.product.acronym}</span>
         </div>
         <div className="topbar-spacer" />
+        <button
+          className="cmdk"
+          onClick={() => setPaletteOpen(true)}
+          title="Search and jump anywhere"
+          aria-label="Open the command palette"
+        >
+          <span className="cmdk-label">Search</span>
+          <kbd>{isMac() ? '⌘' : 'Ctrl'}K</kbd>
+        </button>
+        <NotificationBell />
         <ThemeToggle />
         <button
           className="help-btn"
-          onClick={() => setGuideOpen(true)}
+          onClick={openGuide}
           title="Guide for this screen (?)"
           aria-label="Open the guide"
         >
@@ -100,10 +119,32 @@ export function App() {
         </Routes>
       </main>
 
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenGuide={openGuide} />
       <GuideDrawer open={guideOpen} onClose={() => setGuideOpen(false)} />
-      <GuidePrompt onOpen={() => setGuideOpen(true)} />
+      <GuidePrompt onOpen={openGuide} />
     </div>
   );
+}
+
+function isMac(): boolean {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+}
+
+/**
+ * Cmd-K, or Ctrl-K off a Mac. Unlike the `?` shortcut this one deliberately
+ * works while a field has focus — the whole point is to leave wherever you are.
+ */
+function useCommandKey(action: () => void) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        action();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [action]);
 }
 
 /** Global single-key shortcut that stays out of the way while typing. */

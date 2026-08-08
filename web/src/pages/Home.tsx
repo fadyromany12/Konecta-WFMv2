@@ -1,21 +1,20 @@
 import { useEffect, useState } from 'react';
 import { api, type ClockState } from '../api';
 import { useAsync, useSession } from '../state';
+import { relativeTime, useLive } from '../live';
+import { useToast } from '../components/Toast';
 import { Banner, Button, Card, Chip, Empty, Loading, Stamp } from '../components/ui';
 
-/** The web clock and the messages waiting for this user. */
+/** The web clock and the notifications waiting for this user. */
 export function Home() {
   const { user } = useSession();
+  const toast = useToast();
+  const { notifications, markRead } = useLive();
   const [now, setNow] = useState(new Date());
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState('');
 
   const clock = useAsync(() => api.get<ClockState>('/clock'), []);
-  const messages = useAsync(
-    () => api.get<{ messages: any[] }>('/messages'),
-    [],
-  );
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -32,16 +31,18 @@ export function Home() {
 
   async function punch(type: 'ON' | 'OFF' | 'CHANGE', code?: string) {
     setBusy(true);
-    setFlash(null);
     try {
       const res = await api.post<{ ok: boolean; message: string }>('/clock/punch', {
         type,
         activity: type === 'OFF' ? null : (code ?? activity),
       });
-      setFlash({ tone: 'good', text: res.message });
+      // A punch that raises a Late exception is still a successful punch, but
+      // the advisor needs to read that sentence rather than watch it fade.
+      if (res.message.includes('late')) toast.warn(res.message);
+      else toast.success(res.message);
       clock.reload();
     } catch (err) {
-      setFlash({ tone: 'error', text: (err as Error).message });
+      toast.error((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -53,7 +54,6 @@ export function Home() {
     <div className="grid-2">
       <Card title="Web Clock" subtitle={state?.payrollDate ? `Payroll date ${state.payrollDate}` : undefined}>
         {clock.loading && <Loading what="your clock" />}
-        {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
 
         {state && (
           <>
@@ -149,15 +149,22 @@ export function Home() {
         )}
       </Card>
 
-      <Card title="Messages" subtitle={`Signed in as ${user?.roleLabel}`}>
-        {messages.loading && <Loading what="messages" />}
-        {messages.data?.messages.length === 0 && <Empty>Nothing needs your attention.</Empty>}
-        {messages.data?.messages.map((m) => (
-          <div key={m.id} style={{ marginBottom: '0.7rem' }}>
+      <Card
+        title="Messages"
+        subtitle={`Signed in as ${user?.roleLabel}`}
+        actions={
+          notifications.some((n) => !n.read) ? (
+            <Chip label={`${notifications.filter((n) => !n.read).length} unread`} tone="accent" />
+          ) : undefined
+        }
+      >
+        {notifications.length === 0 && <Empty>Nothing needs your attention.</Empty>}
+        {notifications.slice(0, 12).map((m) => (
+          <div key={m.id} style={{ marginBottom: '0.7rem' }} onMouseEnter={() => !m.read && void markRead(m.id)}>
             <Banner tone={m.severity === 'WARN' ? 'warn' : 'info'}>
               <strong>{m.subject}</strong>
               <div>{m.body}</div>
-              <div className="muted">{m.created_at}</div>
+              <div className="muted">{relativeTime(m.createdAt)}</div>
             </Banner>
           </div>
         ))}

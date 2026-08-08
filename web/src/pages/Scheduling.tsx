@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useSearchParams } from 'react-router-dom';
 import { SubTabs } from '../App';
 import { api, type Person, type ScheduleShift } from '../api';
 import { useAsync, useSession } from '../state';
+import { useToast } from '../components/Toast';
 import {
   Banner,
   Button,
@@ -12,7 +13,7 @@ import {
   Empty,
   GroupPicker,
   Issues,
-  Loading,
+  SkeletonTable,
   TimeInput,
   Toolbar,
 } from '../components/ui';
@@ -45,18 +46,29 @@ export function Scheduling() {
  */
 function EditSchedule() {
   const { groups, catalog } = useSession();
+  const toast = useToast();
+  const [params, setParams] = useSearchParams();
   const [group, setGroup] = useState('');
-  const [personId, setPersonId] = useState<number | null>(null);
+  // The command palette lands here with ?userId=, so the screen opens on the
+  // person you asked for rather than whoever is first alphabetically.
+  const [personId, setPersonId] = useState<number | null>(
+    params.get('userId') ? Number(params.get('userId')) : null,
+  );
   const [date, setDate] = useState(today());
   const [shifts, setShifts] = useState<ScheduleShift[]>([]);
   const [selected, setSelected] = useState<{ shift: number; row: number } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [issues, setIssues] = useState<any[]>([]);
-  const [flash, setFlash] = useState<{ tone: 'good' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     if (!group && groups.length > 0) setGroup(groups.find((g) => g.type === 'SYSTEM')?.key ?? groups[0].key);
   }, [groups, group]);
+
+  // Follow the URL when the palette is used again while already on this screen.
+  useEffect(() => {
+    const requested = params.get('userId');
+    if (requested && Number(requested) !== personId) setPersonId(Number(requested));
+  }, [params, personId]);
 
   const people = useAsync(
     () => (group ? api.get<{ people: Person[] }>(`/people?group=${encodeURIComponent(group)}`) : Promise.resolve({ people: [] })),
@@ -67,6 +79,12 @@ function EditSchedule() {
     const list = people.data?.people ?? [];
     if (list.length > 0 && !list.some((p) => p.id === personId)) setPersonId(list[0].id);
   }, [people.data, personId]);
+
+  function choosePerson(id: number) {
+    setPersonId(id);
+    // Keep the URL honest so the screen can be shared or reloaded.
+    setParams({ userId: String(id) }, { replace: true });
+  }
 
   const schedule = useAsync(
     () =>
@@ -158,17 +176,16 @@ function EditSchedule() {
   }
 
   async function save() {
-    setFlash(null);
     setIssues([]);
     try {
       const res = await api.put<{ ok: boolean; issues: any[] }>(`/schedules/${personId}/${date}`, { shifts });
       setIssues(res.issues);
-      setFlash({ tone: 'good', text: 'Schedule saved. The timecard has been re-derived from the new plan.' });
+      toast.success('Schedule saved.', 'The timecard has been re-derived from the new plan.');
       setDirty(false);
       schedule.reload();
     } catch (err: any) {
       setIssues(err.body?.issues ?? []);
-      setFlash({ tone: 'error', text: err.message });
+      toast.error(err.message, 'Nothing was saved — the schedule is unchanged.');
     }
   }
 
@@ -180,7 +197,7 @@ function EditSchedule() {
         <GroupPicker groups={groups} value={group} onChange={setGroup} />
         <label className="field">
           <span>Advisor</span>
-          <select value={personId ?? ''} onChange={(e) => setPersonId(Number(e.target.value))}>
+          <select value={personId ?? ''} onChange={(e) => choosePerson(Number(e.target.value))}>
             {people.data?.people.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name} ({p.employee_id})
@@ -191,8 +208,6 @@ function EditSchedule() {
         <DateField label="Date" value={date} onChange={setDate} />
         <Button onClick={() => schedule.reload()}>Go</Button>
       </Toolbar>
-
-      {flash && <Banner tone={flash.tone}>{flash.text}</Banner>}
 
       <Card
         title={person ? `${person.name} — ${date}` : 'Schedule'}
@@ -212,7 +227,7 @@ function EditSchedule() {
           </>
         }
       >
-        {schedule.loading && <Loading what="schedule" />}
+        {schedule.loading && !schedule.data && <SkeletonTable rows={5} columns={5} />}
         {!schedule.loading && shifts.length === 0 && <Empty>Nothing scheduled. Use Add shift to create one.</Empty>}
 
         {shifts.map((shift, si) => (
@@ -292,6 +307,7 @@ function EditSchedule() {
 /** Drop one exception across a whole group — a team meeting, a focus group. */
 function GroupExceptions() {
   const { groups, catalog } = useSession();
+  const toast = useToast();
   const [group, setGroup] = useState('');
   const [date, setDate] = useState(today());
   const [activityKey, setActivityKey] = useState('TEAM_MEETING');
@@ -324,8 +340,21 @@ function GroupExceptions() {
         { group, date, activityKey, startTime, endTime },
       );
       setResult(res);
+      const detail =
+        res.skipped.length > 0
+          ? `${res.skipped.length} skipped — see the list below for why.`
+          : 'Everyone in the group had a shift that could take it.';
+      if (res.applied.length > 0) {
+        toast.success(
+          `Applied to ${res.applied.length} schedule${res.applied.length === 1 ? '' : 's'}.`,
+          detail,
+        );
+      } else {
+        toast.warn('Nothing was changed.', detail);
+      }
     } catch (err) {
       setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setBusy(false);
     }

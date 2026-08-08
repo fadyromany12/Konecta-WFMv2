@@ -176,29 +176,80 @@ regenerating it, so an automatic rebuild can never discard a supervisor's work.
 
 ## The screens
 
-**Home** — web clock and messages. Clock on, change activity, clock off.
+**Dashboard** — for a supervisor, the intraday command centre: who is on right now,
+who is late, live adherence, and today's cover against the forecast. For an advisor,
+the web clock and their messages. It updates as things happen (see below) rather than
+on a timer.
 
 **Time & Attendance** — Payroll Summary (a row per timecard, its codes, the approval
 checkbox) and the timecard editor, which shows the payroll shift detail and the
 scheduled shift side by side while you edit. Worked Calendar gives a month at a time.
 
-**Scheduling** — the schedule editor (insert row above, delete row, add shift) and
-Group Schedule Exceptions for dropping a team meeting across a whole group at once.
-An exception that falls outside somebody's shift is skipped and reported rather than
-silently moving their shift.
+**Scheduling** — the schedule editor (insert row above, delete row, add shift),
+Group Schedule Exceptions for dropping a team meeting across a whole group at once,
+and Forecast & Coverage: contact volume in, required headcount out via Erlang C,
+compared against what is actually rostered, with an auto-scheduler that drafts shifts
+into the worst-covered intervals. An exception that falls outside somebody's shift is
+skipped and reported rather than silently moving their shift.
 
-**Absence** — time off requests checked against accrued balances, and approvals.
+**My Shifts** — time off requests checked against accrued balances, shift swaps
+(both advisors agree, then a supervisor approves, and the approval is what actually
+exchanges the schedules), and extra hours: supervisors post a block, advisors bid,
+the supervisor awards. Awarding adds the shift, which is what lets them clock on.
 
 **Admin** — Details of Who and custom groups, shift rules, alternate delegation, and
 the audit trail. Groups prefixed `--` come from the reporting hierarchy, `-` are your
 own, `ALT_` are delegated to you.
 
 **Reports** — the Pulse Report (schedule against reality for one advisor and day,
-with an adherence bar and the questions worth asking), the Non-Worked Exception
-report, and a query tool with CSV export.
+with an adherence bar and the questions worth asking), Analytics (adherence trend,
+exception mix, shrinkage by activity, and advisor scorecards sorted by exception
+count), the Non-Worked Exception report, and a query tool with CSV export.
+
+## Live updates, search and bulk approval
+
+**Events are pushed, not polled.** `GET /api/events` is a server-sent event stream.
+A punch, an approval, a schedule change or a swap is delivered to everyone entitled
+to see it the moment it happens, and the screens that care re-read themselves. Who
+is entitled is resolved once when the stream opens: an advisor only ever hears about
+themselves, whatever else is going on.
+
+The stream is a speed-up, not a dependency. Every live screen keeps a slow poll
+underneath it, because the stream can fail for reasons the browser cannot see — a
+buffering proxy, or a platform running more than one instance so the event is raised
+somewhere the client is not connected. The dot under the notification bell is lit
+only while the stream is genuinely open; when it is grey the app is on its timer.
+
+**Notifications** are the durable half of the same idea: a late start, a swap waiting
+on you, extra hours awarded, a schedule someone changed. A supervisor is not looking
+at the screen at the moment an advisor clocks on late, so it has to still be there
+afterwards.
+
+**⌘K** (Ctrl-K) opens a command palette: any screen, any advisor by name or employee
+ID — which lands you on their Pulse Report or schedule directly — plus the theme and
+the guide.
+
+**Approve N clean** on the Payroll Summary approves every timecard that nobody needed
+to read. What counts as clean is decided by the server, not the screen, and it is
+deliberately strict: any exception code, any validation error, an assumed clock-off,
+a shift still running, an unfinished day, or a date payroll has already run for is
+left behind with the reason shown. See `server/src/domain/bulkApproval.ts` — a card
+wrongly left for a human costs five seconds; one wrongly swept into an approved
+payroll run is somebody paid the wrong amount.
 
 ## Notes
 
 The seed password is shared across demonstration accounts and the JWT secret falls
 back to a development default — set `PULSE_SECRET` and issue real credentials before
 this is put anywhere real. `PULSE_DB` overrides the database location.
+
+The event stream is the one route that accepts its token from the query string,
+because `EventSource` cannot set request headers. That is worse than a header — URLs
+reach access logs — so it is confined to that single read-only route rather than
+allowed everywhere.
+
+On Vercel the database defaults to `:memory:` and seeds itself on cold start, so the
+hosted deployment needs no writable disk and no configuration. It also means data
+does not survive a cold start, and events raised on one instance are not seen by a
+client connected to another. Point `PULSE_DB` at a real database before treating any
+of it as durable.

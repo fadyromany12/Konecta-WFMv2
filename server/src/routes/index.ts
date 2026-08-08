@@ -29,6 +29,7 @@ import {
   visibleUserIds,
 } from '../services/people.js';
 import { getClockState, punch } from '../services/clock.js';
+import { emit, notify } from '../services/events.js';
 import { applyGroupException, getShifts, getShiftsInRange, saveShifts } from '../services/scheduling.js';
 import {
   generateTimecard,
@@ -198,7 +199,16 @@ api.put(
       actorId: req.user!.id,
     });
     // Re-derive the card so schedule-driven exceptions follow the new plan.
-    if (result.ok) generateTimecard({ userId, date, actorId: req.user!.id });
+    if (result.ok) {
+      generateTimecard({ userId, date, actorId: req.user!.id });
+      const who = getUser(userId)?.name ?? `#${userId}`;
+      emit('schedule.changed', userId, `${req.user!.name} changed ${who}'s ${date} schedule`, { date });
+      notify(
+        [userId],
+        'Your schedule changed',
+        `${req.user!.name} edited your schedule for ${date}. Check My Shifts before you next work.`,
+      );
+    }
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );
@@ -232,9 +242,17 @@ api.post(
       endTime: body.endTime,
       actorId: req.user!.id,
     });
+    const activityName =
+      SCHEDULE_ACTIVITIES.find((a) => a.key === body.activityKey)?.name ?? body.activityKey;
     for (const userId of result.applied) {
       generateTimecard({ userId, date: body.date, actorId: req.user!.id });
+      emit('schedule.changed', userId, `${activityName} added to ${body.date}`, { date: body.date });
     }
+    notify(
+      result.applied,
+      'Schedule exception added',
+      `${activityName} on ${body.date}, ${body.startTime}–${body.endTime}, added by ${req.user!.name}.`,
+    );
     res.json(result);
   }),
 );
@@ -279,6 +297,12 @@ api.put(
       actorId: req.user!.id,
       actorRole: req.user!.role,
     });
+    if (result.ok) {
+      const who = getUser(userId)?.name ?? `#${userId}`;
+      emit('timecard.saved', userId, `${req.user!.name} edited ${who}'s ${date} timecard`, {
+        payrollDate: date,
+      });
+    }
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );
@@ -455,6 +479,16 @@ api.post(
         'UPDATE accruals SET balance_hours = balance_hours - ? WHERE user_id = ? AND accrual_type = ?',
       ).run(request.hours, request.user_id, request.accrual_type);
     }
+
+    notify(
+      [request.user_id],
+      `Time off ${body.status.toLowerCase()}`,
+      `${req.user!.name} ${body.status.toLowerCase()} your ${request.accrual_type.toLowerCase()} request for ` +
+        `${request.start_date}${request.end_date === request.start_date ? '' : ` to ${request.end_date}`} (${request.hours}h).`,
+      body.status === 'APPROVED' ? 'INFO' : 'WARN',
+    );
+    emit('message', request.user_id, `Time off ${body.status.toLowerCase()}`, { requestId: id });
+
     res.json({ ok: true });
   }),
 );
