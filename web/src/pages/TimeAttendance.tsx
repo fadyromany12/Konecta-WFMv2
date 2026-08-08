@@ -63,6 +63,11 @@ function PayrollSummary() {
   const [busy, setBusy] = useState(false);
   /** Rows whose approval is in flight, shown as approved before the server says so. */
   const [optimistic, setOptimistic] = useState<Record<string, boolean>>({});
+  // Forty advisors across a week is 280 rows, and the twelve that need reading
+  // are scattered through it. Without these the screen is a wall.
+  const [filter, setFilter] = useState<'all' | 'unapproved' | 'exceptions' | 'errors'>('all');
+  const [sort, setSort] = useState<'date' | 'name' | 'exceptions'>('date');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (!group && groups.length > 0) {
@@ -114,6 +119,44 @@ function PayrollSummary() {
     }
   }
 
+  /**
+   * The payroll file: one row per advisor, per day, per code, approved only.
+   *
+   * Everything else in this tool stops at a screen. Without this the last step
+   * is somebody reading figures off a monitor and retyping them somewhere else,
+   * which is exactly where the errors the product exists to prevent get put
+   * back in.
+   */
+  async function exportPayroll() {
+    try {
+      const res = await api.get<{ rows: any[] }>(
+        `/payroll/export?group=${encodeURIComponent(group)}&start=${start}&end=${end}`,
+      );
+      if (res.rows.length === 0) {
+        toast.warn('Nothing approved in that range to export.', 'Approve the cards first.');
+        return;
+      }
+      const header = ['employee_id', 'name', 'payroll_date', 'code', 'project', 'activity', 'minutes'];
+      const csv = [
+        header.join(','),
+        ...res.rows.map((r) =>
+          [r.employeeId, r.name, r.payrollDate, r.code, r.project, r.activity, r.minutes]
+            .map((v) => JSON.stringify(v ?? ''))
+            .join(','),
+        ),
+      ].join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `pulse-payroll-${start}-to-${end}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${res.rows.length} lines.`, 'Approved cards only.');
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
   /** Approve everything the server judges clean. It decides, not this screen. */
   async function approveClean() {
     setBusy(true);
@@ -146,12 +189,35 @@ function PayrollSummary() {
     }
   }
 
-  const rows = (summary.data?.rows ?? []).map((row) => {
+  const allRows = (summary.data?.rows ?? []).map((row) => {
     const pendingChange = optimistic[`${row.userId}-${row.payrollDate}`];
     return pendingChange === undefined ? row : { ...row, approved: pendingChange };
   });
-  const pending = rows.filter((r) => !r.approved && !r.inProgress).length;
-  const withExceptions = rows.filter((r) => r.exceptions.length > 0).length;
+  const pending = allRows.filter((r) => !r.approved && !r.inProgress).length;
+  const withExceptions = allRows.filter((r) => r.exceptions.length > 0).length;
+
+  const needle = search.trim().toLowerCase();
+  const rows = allRows
+    .filter((r) => {
+      if (filter === 'unapproved' && (r.approved || r.inProgress)) return false;
+      if (filter === 'exceptions' && r.exceptions.length === 0) return false;
+      if (filter === 'errors' && !r.hasErrors && !r.assumedOff) return false;
+      if (needle && !`${r.name} ${r.employeeId}`.toLowerCase().includes(needle)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      // Sorting by exception count puts the cards that need a person to read
+      // them at the top, which is the entire job on this screen.
+      if (sort === 'exceptions') {
+        const diff = b.exceptions.length - a.exceptions.length;
+        if (diff !== 0) return diff;
+      }
+      if (sort === 'name') {
+        const diff = a.name.localeCompare(b.name);
+        if (diff !== 0) return diff;
+      }
+      return a.payrollDate.localeCompare(b.payrollDate) || a.name.localeCompare(b.name);
+    });
   // The same test the server applies, so the button's count is honest.
   const cleanCount = rows.filter(
     (r) =>
@@ -170,6 +236,9 @@ function PayrollSummary() {
         <DateField label="Start" value={start} onChange={setStart} />
         <DateField label="End" value={end} onChange={setEnd} />
         <Button onClick={() => summary.reload()}>Go</Button>
+        <Button onClick={exportPayroll} title="One row per advisor, per day, per code — approved cards only">
+          Payroll file
+        </Button>
         <Button
           variant="primary"
           data-tour="bulk-approve"
@@ -187,6 +256,49 @@ function PayrollSummary() {
         </div>
       </Toolbar>
 
+      <Toolbar>
+        <div className="segmented" role="group" aria-label="Filter timecards">
+          {(
+            [
+              ['all', `All ${allRows.length}`],
+              ['unapproved', `Unapproved ${pending}`],
+              ['exceptions', `Exceptions ${withExceptions}`],
+              ['errors', 'Needs a look'],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              className={filter === key ? 'active' : ''}
+              aria-pressed={filter === key}
+              onClick={() => setFilter(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          <span>Sort by</span>
+          <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
+            <option value="date">Date</option>
+            <option value="name">Advisor</option>
+            <option value="exceptions">Exceptions first</option>
+          </select>
+        </label>
+        <label className="field" style={{ flex: 1, minWidth: '10rem' }}>
+          <span>Find an advisor</span>
+          <input
+            value={search}
+            placeholder="Name or employee ID"
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </label>
+        {rows.length !== allRows.length && (
+          <span className="muted">
+            {rows.length} of {allRows.length} shown
+          </span>
+        )}
+      </Toolbar>
+
       {user && (
         <p className="muted" style={{ marginBottom: '0.6rem' }}>
           Your edit window is {user.editWindowDays} days. Cards older than that must go to your Operations Manager.
@@ -197,7 +309,13 @@ function PayrollSummary() {
       <Card>
         {summary.loading && !summary.data && <SkeletonTable rows={7} columns={9} />}
         {summary.error && <Banner tone="error">{summary.error}</Banner>}
-        {!summary.loading && rows.length === 0 && <Empty>No timecards in that range.</Empty>}
+        {!summary.loading && rows.length === 0 && (
+          <Empty>
+            {allRows.length === 0
+              ? 'No timecards in that range.'
+              : 'Nothing matches that filter. Everything in range is already clean.'}
+          </Empty>
+        )}
 
         {rows.length > 0 && (
           <div className="table-scroll">
@@ -289,6 +407,8 @@ function TimecardEditor() {
   const [selected, setSelected] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saveIssues, setSaveIssues] = useState<any[]>([]);
+  /** Required once payroll has run over this date; the server insists too. */
+  const [reason, setReason] = useState('');
 
   const loaded = useAsync(
     () =>
@@ -340,6 +460,53 @@ function TimecardEditor() {
     setDirty(true);
   }
 
+  /**
+   * Keyboard flow across the grid.
+   *
+   * A supervisor correcting thirty cards a day was reaching for the mouse on
+   * every field. Arrow keys move between rows, Ctrl-Enter saves, and Alt-Enter
+   * and Alt-Backspace add and remove a row — so a whole card can be corrected
+   * without leaving the keyboard, which is the difference between a tool people
+   * tolerate and one they are fast in.
+   *
+   * Plain Enter is deliberately not save: in a grid of inputs it is the key
+   * people press to move on, and binding it to a write would cost somebody a
+   * half-finished card.
+   */
+  function onGridKeyDown(e: React.KeyboardEvent<HTMLTableSectionElement>) {
+    if (readOnly) return;
+    const target = e.target as HTMLElement;
+    const cell = target.closest('td');
+    const row = target.closest('tr');
+    if (!row) return;
+    const index = Number(row.dataset.row);
+    if (!Number.isFinite(index)) return;
+
+    // Let the browser handle text editing within a field.
+    const editing = target.tagName === 'INPUT' || target.tagName === 'SELECT';
+
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && (!editing || e.altKey || target.tagName === 'INPUT')) {
+      if (target.tagName === 'SELECT' && !e.altKey) return; // arrows change the option
+      e.preventDefault();
+      const next = e.key === 'ArrowDown' ? index + 1 : index - 1;
+      if (next < 0 || next >= rows.length) return;
+      setSelected(next);
+      const column = cell ? Array.from(row.children).indexOf(cell) : 1;
+      const destination = document.querySelector<HTMLElement>(`tr[data-row="${next}"]`);
+      const field = destination?.children[column]?.querySelector<HTMLElement>('input, select');
+      (field ?? destination)?.focus();
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (dirty) void save();
+    } else if (e.key === 'Enter' && e.altKey) {
+      e.preventDefault();
+      insertBelow(index);
+    } else if (e.key === 'Backspace' && e.altKey) {
+      e.preventDefault();
+      if (rows.length > 1) removeRow(index);
+    }
+  }
+
   function insertBelow(index: number) {
     setRows((current) => {
       const anchor = current[index]?.endAt ?? `${date} 00:00`;
@@ -361,7 +528,10 @@ function TimecardEditor() {
     try {
       const res = await api.put<{ ok: boolean; issues: any[]; decision: EditDecision }>(
         `/timecards/${userId}/${date}`,
-        { rows: rows.map(({ id: _id, ...rest }) => rest) },
+        {
+          rows: rows.map(({ id: _id, ...rest }) => rest),
+          correctionReason: reason.trim() || undefined,
+        },
       );
       setSaveIssues(res.issues);
       if (res.decision.postPayroll) {
@@ -429,7 +599,16 @@ function TimecardEditor() {
         actions={
           <>
             {!readOnly && (
-              <Button variant="primary" onClick={save} disabled={!dirty}>
+              <Button
+                variant="primary"
+                onClick={save}
+                disabled={!dirty || (!!decision?.postPayroll && !reason.trim())}
+                title={
+                  decision?.postPayroll && !reason.trim()
+                    ? 'Give a reason for the correction first'
+                    : 'Save (Ctrl-Enter)'
+                }
+              >
                 Save
               </Button>
             )}
@@ -447,7 +626,25 @@ function TimecardEditor() {
         }
       >
         {decision && !decision.allowed && <Banner tone="error">{decision.reason}</Banner>}
-        {decision?.postPayroll && decision.allowed && <Banner tone="warn">{decision.reason}</Banner>}
+        {decision?.postPayroll && decision.allowed && (
+          <>
+            <Banner tone="warn">{decision.reason}</Banner>
+            {/* A correction to a period that has already been paid is a
+                financial adjustment. "Somebody edited it" is not an answer at
+                audit, so the reason is required rather than encouraged. */}
+            <label className="field" style={{ marginBottom: '0.7rem' }}>
+              <span>Reason for this correction (required, goes on the audit record)</span>
+              <input
+                value={reason}
+                placeholder="e.g. Advisor worked the overtime; missed on the original run"
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </label>
+          </>
+        )}
+        {card?.correctionReason && (
+          <Banner tone="info">Corrected after payroll: {card.correctionReason}</Banner>
+        )}
         {card.approved && <Banner tone="good">Approved by {card.approvedBy} at {card.approvedAt}. Remove the approval to edit.</Banner>}
         {card.assumedOff && (
           <Banner tone="warn">
@@ -475,11 +672,11 @@ function TimecardEditor() {
                 <th />
               </tr>
             </thead>
-            <tbody>
+            <tbody onKeyDown={onGridKeyDown}>
               {rows.map((row, i) => {
                 const minutes = toMinutes(row.endAt) - toMinutes(row.startAt);
                 return (
-                  <tr key={i} className={selected === i ? 'selected' : ''}>
+                  <tr key={i} data-row={i} className={selected === i ? 'selected' : ''}>
                     <td className="radio-cell">
                       <input type="radio" name="row" checked={selected === i} onChange={() => setSelected(i)} />
                     </td>
@@ -553,6 +750,13 @@ function TimecardEditor() {
             </tbody>
           </table>
         </div>
+
+        {!readOnly && (
+          <p className="muted keys">
+            <kbd>↑</kbd> <kbd>↓</kbd> move between rows · <kbd>Alt</kbd>+<kbd>↵</kbd> insert a row ·{' '}
+            <kbd>Alt</kbd>+<kbd>⌫</kbd> delete one · <kbd>Ctrl</kbd>+<kbd>↵</kbd> save
+          </p>
+        )}
 
         <Issues issues={[...saveIssues, ...card.issues]} />
       </Card>

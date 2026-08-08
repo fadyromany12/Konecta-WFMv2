@@ -30,7 +30,13 @@ import {
 } from '../services/people.js';
 import { getClockState, punch } from '../services/clock.js';
 import { emit, notify } from '../services/events.js';
-import { applyGroupException, getShifts, getShiftsInRange, saveShifts } from '../services/scheduling.js';
+import {
+  applyGroupException,
+  getShifts,
+  getShiftsInRange,
+  removeGroupException,
+  saveShifts,
+} from '../services/scheduling.js';
 import {
   generateTimecard,
   payrollSummary,
@@ -275,6 +281,43 @@ api.post(
   }),
 );
 
+api.post(
+  '/schedules/group-exception/remove',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        group: z.string().optional(),
+        userIds: z.array(z.number()).optional(),
+        date: dateSchema,
+        activityKey: z.string(),
+        startTime: timeSchema,
+        endTime: timeSchema,
+      })
+      .parse(req.body);
+
+    const ids = body.userIds ?? (await resolveGroup(req.user!, body.group));
+    const allowed = new Set(await visibleUserIds(req.user!));
+    const targets = ids.filter((id) => allowed.has(id));
+    if (targets.length === 0) throw new HttpError(400, 'No employees in range for that group.');
+
+    const result = await removeGroupException({
+      userIds: targets,
+      date: body.date,
+      activityKey: body.activityKey as any,
+      startTime: body.startTime,
+      endTime: body.endTime,
+      actorId: req.user!.id,
+    });
+    for (const userId of result.removed) {
+      await generateTimecard({ userId, date: body.date, actorId: req.user!.id });
+      emit('schedule.changed', userId, `An exception was removed from ${body.date}`, { date: body.date });
+    }
+    res.json(result);
+  }),
+);
+
 // --------------------------------------------------------------- timecards
 api.get(
   '/timecards/:userId/:date',
@@ -311,8 +354,11 @@ api.put(
     const userId = Number(req.params.userId);
     const date = dateSchema.parse(req.params.date);
     if (!(await canManage(req.user!, userId))) throw new HttpError(403, 'You cannot edit that timecard.');
-    const body = z.object({ rows: z.array(rowSchema) }).parse(req.body);
+    const body = z
+      .object({ rows: z.array(rowSchema), correctionReason: z.string().max(500).optional() })
+      .parse(req.body);
     const result = await saveTimecard({
+      correctionReason: body.correctionReason,
       userId,
       date,
       rows: body.rows,

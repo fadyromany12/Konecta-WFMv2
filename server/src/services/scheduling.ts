@@ -237,3 +237,75 @@ function resolveWithin(reference: Stamp, time: string): Stamp {
   if (toMinutes(sameDay) >= toMinutes(reference)) return sameDay;
   return `${addDays(reference.slice(0, 10), 1)} ${time}`;
 }
+
+/**
+ * Take a group exception back off everybody's schedule.
+ *
+ * Applying a team meeting to twenty people took one click; removing it took
+ * twenty edits, which meant in practice it did not get removed — a meeting that
+ * moved stayed on the schedule and quietly counted against everybody's
+ * adherence for the rest of the week.
+ *
+ * Removal is by shape rather than by an identifier, because the exception was
+ * never stored as an object: it is rows in a schedule. A row matching the
+ * activity and start time is deleted, and the row that resumed the previous
+ * activity goes with it — but only when it really is the resume row this
+ * inserted, or removing a meeting would swallow whatever the advisor was
+ * genuinely scheduled to do next.
+ */
+export async function removeGroupException(params: {
+  userIds: number[];
+  date: DateStr;
+  activityKey: ScheduleActivityKey;
+  startTime: string;
+  endTime: string;
+  actorId: number;
+}): Promise<{ removed: number[]; skipped: { userId: number; reason: string }[] }> {
+  const removed: number[] = [];
+  const skipped: { userId: number; reason: string }[] = [];
+
+  for (const userId of params.userIds) {
+    const shifts = await getShifts(userId, params.date);
+    if (shifts.length === 0) {
+      skipped.push({ userId, reason: 'No shift scheduled on this date.' });
+      continue;
+    }
+
+    const shift = shifts[0];
+    const index = shift.rows.findIndex(
+      (r) => r.activityKey === params.activityKey && timeOf(r.startAt) === params.startTime,
+    );
+    if (index === -1) {
+      skipped.push({ userId, reason: `No ${params.activityKey} at ${params.startTime} on their schedule.` });
+      continue;
+    }
+
+    const rows = [...shift.rows];
+    const resume = rows[index + 1];
+    // Drop the resume row only if it starts exactly where the exception ended.
+    // Anything else belongs to the advisor's real schedule.
+    const dropResume = resume && timeOf(resume.startAt) === params.endTime;
+    rows.splice(index, dropResume ? 2 : 1);
+
+    if (rows.length === 0) {
+      skipped.push({ userId, reason: 'Removing it would leave an empty shift.' });
+      continue;
+    }
+
+    const result = await saveShifts({
+      userId,
+      date: params.date,
+      shifts: [{ ...shift, rows }, ...shifts.slice(1)],
+      actorId: params.actorId,
+    });
+    if (result.ok) removed.push(userId);
+    else {
+      skipped.push({
+        userId,
+        reason: result.issues.find((i) => i.level === 'error')?.message ?? 'Invalid after removal.',
+      });
+    }
+  }
+
+  return { removed, skipped };
+}

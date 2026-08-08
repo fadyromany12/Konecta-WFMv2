@@ -56,8 +56,39 @@ let ready: Promise<void> | null = null;
  * racing to run it twice.
  */
 export function ensureSchema(): Promise<void> {
-  ready ??= db.exec(schemaFor(db.dialect));
+  ready ??= db.exec(schemaFor(db.dialect)).then(migrate);
   return ready;
+}
+
+/**
+ * Additive migrations for databases that already exist.
+ *
+ * `CREATE TABLE IF NOT EXISTS` creates a missing table and does nothing at all
+ * to one that is already there — so a column added to the schema never reaches
+ * a database that predates it. New tables are handled by the schema itself;
+ * new *columns* need this.
+ *
+ * Deliberately only additive. A destructive migration run automatically on
+ * startup against a database holding payroll records is not something this
+ * should be able to do by accident.
+ */
+async function migrate(): Promise<void> {
+  await addColumn('timecards', 'correction_reason', 'TEXT');
+}
+
+async function addColumn(table: string, column: string, type: string): Promise<void> {
+  try {
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    console.log(`Migrated: added ${table}.${column}`);
+  } catch (err) {
+    // Both engines refuse a duplicate column, with different wording. That is
+    // the expected outcome on every start after the first, so it is not an
+    // error — anything else is, and should surface.
+    const message = err instanceof Error ? err.message.toLowerCase() : String(err);
+    const alreadyThere =
+      message.includes('duplicate column') || message.includes('already exists');
+    if (!alreadyThere) throw err;
+  }
 }
 
 export async function audit(

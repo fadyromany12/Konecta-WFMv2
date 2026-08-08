@@ -19,6 +19,7 @@ import {
 } from '../components/ui';
 import { addDays, durationBetween, rollForward, timeOf, today, withTime } from '../lib/time';
 import { Planning } from './Planning';
+import { ForecastEntry } from './ForecastEntry';
 
 export function Scheduling() {
   return (
@@ -28,12 +29,14 @@ export function Scheduling() {
           { to: '/scheduling', label: 'Edit Advisor Schedule' },
           { to: '/scheduling/group', label: 'Group Schedule Exceptions' },
           { to: '/scheduling/forecast', label: 'Forecast & Coverage' },
+          { to: '/scheduling/volumes', label: 'Enter Forecast' },
         ]}
       />
       <Routes>
         <Route index element={<EditSchedule />} />
         <Route path="group" element={<GroupExceptions />} />
         <Route path="forecast" element={<Planning />} />
+        <Route path="volumes" element={<ForecastEntry />} />
       </Routes>
     </>
   );
@@ -360,6 +363,40 @@ function GroupExceptions() {
     }
   }
 
+  /**
+   * Undo.
+   *
+   * Applying a meeting to twenty people took one click and removing it took
+   * twenty edits — which meant in practice it never got removed, and a meeting
+   * that moved stayed on the schedule counting against everybody's adherence
+   * for the rest of the week.
+   */
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.post<{ removed: number[]; skipped: { userId: number; reason: string }[] }>(
+        '/schedules/group-exception/remove',
+        { group, date, activityKey, startTime, endTime },
+      );
+      setResult({ applied: res.removed, skipped: res.skipped });
+      if (res.removed.length > 0) {
+        toast.success(
+          `Removed from ${res.removed.length} schedule${res.removed.length === 1 ? '' : 's'}.`,
+          'The timecards have been re-derived without it.',
+        );
+      } else {
+        toast.warn('Nothing matched.', 'Check the activity and start time are exactly as they were applied.');
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Card
       title="Group Schedule Exceptions"
@@ -390,6 +427,9 @@ function GroupExceptions() {
         </label>
         <Button variant="primary" onClick={apply} disabled={busy}>
           Apply to group
+        </Button>
+        <Button onClick={remove} disabled={busy} title="Take this exception back off everyone's schedule">
+          Remove from group
         </Button>
       </Toolbar>
 

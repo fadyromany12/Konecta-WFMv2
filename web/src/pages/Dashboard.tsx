@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useAsync, useSession } from '../state';
 import { useLive, useLiveEvent } from '../live';
 import { Ticker } from '../components/Ticker';
+import { useToast } from '../components/Toast';
 import {
   Banner,
   Button,
@@ -44,7 +45,14 @@ interface Snapshot {
     outOfAdherence: number;
     adherencePct: number;
   };
-  alerts: { severity: string; userId: number; name: string; message: string }[];
+  alerts: {
+    key: string;
+    severity: string;
+    userId: number;
+    name: string;
+    message: string;
+    ackedBy?: string | null;
+  }[];
 }
 
 const STATE_LABELS: Record<string, string> = {
@@ -74,6 +82,7 @@ function CommandCentre() {
   const { groups } = useSession();
   const navigate = useNavigate();
   const { connected } = useLive();
+  const toast = useToast();
   const [group, setGroup] = useState('');
   const [tick, setTick] = useState(0);
   /** Set briefly when a push arrives, so the change is visible as movement. */
@@ -120,6 +129,37 @@ function CommandCentre() {
         : Promise.resolve(null),
     [group, tick],
   );
+
+  /**
+   * Claiming an alert.
+   *
+   * Two supervisors watching the same board both ring the same advisor and
+   * neither finds out. This is the smallest thing that fixes it: the list is
+   * still derived fresh every read, but who picked one up persists.
+   */
+  async function claim(alert: { key: string; userId: number; name: string }) {
+    try {
+      const res = await api.post<{ ok: boolean; message: string }>(
+        `/alerts/${encodeURIComponent(alert.key)}/ack`,
+        { userId: alert.userId },
+      );
+      if (res.ok) toast.success(res.message, alert.name);
+      else toast.warn(res.message, `Leave ${alert.name} to them.`);
+      setTick((t) => t + 1);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  async function release(key: string) {
+    try {
+      await api.del(`/alerts/${encodeURIComponent(key)}/ack`);
+      toast.success('Handed back.', 'It is on the list for anybody to pick up.');
+      setTick((t) => t + 1);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
 
   const totals = live.data?.totals;
   const onShift = live.data?.people.filter((p) => p.state !== 'OFF_SHIFT') ?? [];
@@ -217,12 +257,33 @@ function CommandCentre() {
         </Card>
 
         <div>
-          <Card title="Needs attention" subtitle="Things still fixable today">
+          <Card
+            title="Needs attention"
+            subtitle="Things still fixable today. Pick one up so nobody else chases the same person."
+          >
             {(live.data?.alerts.length ?? 0) === 0 && <Empty>Nothing needs chasing right now.</Empty>}
             <ul className="issues">
-              {live.data?.alerts.map((alert, i) => (
-                <li key={i} className={`issue issue-${alert.severity === 'high' ? 'error' : 'warning'}`}>
-                  <strong>{alert.name}</strong> {alert.message}
+              {live.data?.alerts.map((alert) => (
+                <li
+                  key={alert.key}
+                  className={`issue issue-${alert.severity === 'high' ? 'error' : 'warning'} ${
+                    alert.ackedBy ? 'issue-claimed' : ''
+                  }`}
+                >
+                  <div className="issue-line">
+                    <span>
+                      <strong>{alert.name}</strong> {alert.message}
+                    </span>
+                    {alert.ackedBy ? (
+                      <button className="btn btn-ghost" onClick={() => release(alert.key)}>
+                        {alert.ackedBy} has it — hand back
+                      </button>
+                    ) : (
+                      <button className="btn" onClick={() => claim(alert)}>
+                        I'll take it
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

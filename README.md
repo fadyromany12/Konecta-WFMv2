@@ -237,6 +237,42 @@ left behind with the reason shown. See `server/src/domain/bulkApproval.ts` — a
 wrongly left for a human costs five seconds; one wrongly swept into an approved
 payroll run is somebody paid the wrong amount.
 
+## Planning, and the checks around it
+
+**Entering a forecast.** Scheduling → Enter Forecast. Built around pasting two
+columns out of a spreadsheet, because nobody produces a forecast inside a
+workforce tool — it arrives from a planning model. Typing forty-eight numbers is
+the fallback. Nothing is saved until you press Save, so a bad paste costs
+nothing.
+
+**What approving leave costs.** Both halves of that answer already existed — a
+forecast saying how many people each half hour needs, a roster saying how many
+it has — and nothing put them together at the moment somebody clicked Approve.
+"Check cover" on a pending request now answers it in a sentence. It is advisory
+and never refuses: leave is often approved *because* somebody needs the day
+whatever the roster says, and a tool that blocked it would be worked around
+outside the tool, where the roster would not learn about it at all. See
+`server/src/domain/leaveImpact.ts`.
+
+**Claiming an alert.** Two supervisors watching the same board both ring the
+same advisor and neither finds out. The alert list is still derived fresh on
+every read — it is a statement about right now — but who picked one up
+persists, and claimed alerts sort to the bottom rather than disappearing.
+
+**Reasons on post-payroll corrections.** Editing a card after payroll has run is
+a financial adjustment to a period that has already been paid. The reason is
+required by the rule, not just by the form, and it goes on the audit record.
+
+**Undoing a group exception.** Applying a meeting to twenty people took one
+click; removing it took twenty edits, which meant in practice it never got
+removed and a meeting that moved kept counting against everybody's adherence.
+
+**The payroll file.** Time & Attendance → Payroll file. One row per advisor, per
+day, per code, approved cards only. Everything else in the tool stops at a
+screen; without this the last step is somebody reading figures off a monitor and
+retyping them, which is where the errors this product exists to prevent get put
+back in.
+
 ## The guide and the tour
 
 Two different things, deliberately.

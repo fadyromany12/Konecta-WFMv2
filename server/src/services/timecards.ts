@@ -41,6 +41,7 @@ export interface TimecardRecord {
   in_progress: number;
   edited: number;
   notes: string | null;
+  correction_reason: string | null;
 }
 
 export interface TimecardView {
@@ -61,6 +62,7 @@ export interface TimecardView {
   assumedOff: boolean;
   inProgress: boolean;
   edited: boolean;
+  correctionReason: string | null;
   exceptions: string[];
   notes: string[];
   issues: Issue[];
@@ -230,6 +232,7 @@ export async function viewTimecard(params: {
     assumedOff: !!record.assumed_off,
     inProgress: !!record.in_progress,
     edited: !!record.edited,
+    correctionReason: record.correction_reason ?? null,
     exceptions: exceptionCodes(rows),
     notes: safeParse(record.notes),
     issues: validateTimecard(rows, record.payroll_date),
@@ -260,6 +263,8 @@ export async function saveTimecard(params: {
   actorId: number;
   actorRole: Role;
   today?: DateStr;
+  /** Required once payroll has run over this date. */
+  correctionReason?: string;
 }): Promise<SaveTimecardResult> {
   const { userId, date, actorId, actorRole } = params;
   const today = params.today ?? todayStr();
@@ -290,6 +295,25 @@ export async function saveTimecard(params: {
     };
   }
 
+  // A post-payroll correction is a financial adjustment to a period that has
+  // already been paid. "Somebody edited it" is not an answer at audit, so the
+  // reason is required rather than optional — and required here, in the rule,
+  // rather than only in the form that happens to be in front of the user.
+  if (decision.postPayroll && !params.correctionReason?.trim()) {
+    return {
+      ok: false,
+      issues: [
+        {
+          level: 'error',
+          message:
+            'Payroll has already run for this date. Give a reason for the correction before saving — it goes on the audit record.',
+        },
+      ],
+      decision,
+      timecard: await viewTimecard({ userId, date, autoGenerate: false }),
+    };
+  }
+
   const rows = mergeContiguous(sortRows(params.rows));
   const issues = validateTimecard(rows, date);
   if (issues.some((i) => i.level === 'error')) {
@@ -306,10 +330,17 @@ export async function saveTimecard(params: {
     } else {
       await db.run('UPDATE timecards SET edited = 1, updated_at = ? WHERE id = ?', [nowStamp(), id]);
     }
+    if (decision.postPayroll) {
+      await db.run('UPDATE timecards SET correction_reason = ? WHERE id = ?', [
+        params.correctionReason!.trim(),
+        id,
+      ]);
+    }
     const before = record ? await readRows(record.id) : [];
     await writeRows(id, rows);
     await audit(actorId, 'timecard', id, decision.postPayroll ? 'EDIT_POST_PAYROLL' : 'EDIT', {
       payrollDate: date,
+      reason: params.correctionReason?.trim(),
       before,
       after: rows,
     });

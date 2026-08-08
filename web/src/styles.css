@@ -3232,3 +3232,202 @@ html[data-theme='light'] .guide-role-note h3 {
     animation: none;
   }
 }
+
+/* ================================================================ new work ==
+ * Forecast entry, filters, the advisor week, alert claiming and the coverage
+ * note that appears beside an approval.
+ * ========================================================================== */
+
+/* ------------------------------------------------------------ forecast entry */
+
+.paste-box {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--glass-sunken);
+  color: var(--text);
+  resize: vertical;
+  margin-bottom: 0.7rem;
+}
+
+.num-input {
+  width: 5.5rem;
+  text-align: right;
+  font-family: var(--mono);
+}
+
+/* Intervals with no volume are the majority of the grid overnight. Dimming
+   them keeps the eye on the part of the day that carries the traffic. */
+.row-quiet td:first-child,
+.row-quiet .num-input {
+  opacity: 0.55;
+}
+
+.row-quiet:hover td:first-child,
+.row-quiet:hover .num-input,
+.row-quiet:focus-within td:first-child,
+.row-quiet:focus-within .num-input {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------- filter chips */
+
+.segmented {
+  display: inline-flex;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--glass-sunken);
+  padding: 0.15rem;
+  gap: 0.1rem;
+}
+
+.segmented button {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.76rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur) var(--ease-soft),
+    color var(--dur) var(--ease-soft);
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button.active {
+  background: linear-gradient(120deg, var(--k-indigo), var(--k-violet));
+  color: #fff;
+  box-shadow: var(--elev-1);
+}
+
+/* ------------------------------------------------------------ advisor week */
+
+.week {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.week .card {
+  padding: 0.85rem 0.9rem;
+}
+
+.week-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.week-head.is-today {
+  border-bottom-color: var(--accent);
+}
+
+.week-span {
+  font-size: 0.86rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.week-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.week-rows li {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr auto;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.week-shift + .week-shift {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--hairline);
+}
+
+/* ---------------------------------------------------------- alert claiming */
+
+.issue-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.issue-line .btn {
+  font-size: 0.72rem;
+  padding: 0.18rem 0.5rem;
+  white-space: nowrap;
+}
+
+/* Claimed, not resolved: still visible, visibly somebody else's. */
+.issue-claimed {
+  opacity: 0.55;
+}
+
+.issue-claimed:hover {
+  opacity: 1;
+}
+
+/* -------------------------------------------------------- coverage warning */
+
+.cover-note {
+  margin-top: 0.45rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--text-faint);
+  background: var(--glass-sunken);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: normal;
+  max-width: 26rem;
+  animation: rise-in 320ms var(--ease) both;
+}
+
+.cover-none {
+  border-left-color: var(--good);
+}
+.cover-watch {
+  border-left-color: var(--warn);
+}
+.cover-high {
+  border-left-color: var(--error);
+  background: color-mix(in oklab, var(--error) 12%, transparent);
+}
+
+/* ------------------------------------------------------- keyboard hint line */
+
+.keys {
+  margin-top: 0.6rem;
+  font-size: 0.72rem;
+}
+
+.keys kbd {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  padding: 0.08rem 0.28rem;
+  border-radius: 4px;
+  border: 1px solid var(--hairline);
+  background: var(--glass);
+  color: var(--text-dim);
+}

@@ -19,6 +19,7 @@ import { activeShift, shiftSpan, toSegments } from '../domain/schedule.js';
 import { INTERVAL_MINUTES } from '../domain/forecast.js';
 import { addDays, diffMinutes, nowStamp, todayStr, type DateStr, type Stamp } from '../domain/time.js';
 import { placeholders } from './people.js';
+import { alertAcks } from './planning.js';
 import { getShiftsFor } from './scheduling.js';
 
 /**
@@ -70,7 +71,20 @@ export interface IntradaySnapshot {
     outOfAdherence: number;
     adherencePct: number;
   };
-  alerts: { severity: 'high' | 'medium'; userId: number; name: string; message: string }[];
+  alerts: {
+    /**
+     * Stable identity for this alert: the person, the kind of problem and the
+     * day. The list itself is rebuilt on every read, so an acknowledgement has
+     * to key off something that survives the rebuild.
+     */
+    key: string;
+    severity: 'high' | 'medium';
+    userId: number;
+    name: string;
+    message: string;
+    /** Set when a supervisor has taken responsibility for it. */
+    ackedBy?: string | null;
+  }[];
 }
 
 interface PunchRow {
@@ -244,6 +258,7 @@ export async function intradaySnapshot(
 
     if (state === 'LATE' && minutesLate !== null) {
       alerts.push({
+        key: `late:${user.id}:${today}`,
         severity: minutesLate > 15 ? 'high' : 'medium',
         userId: user.id,
         name: user.name,
@@ -254,6 +269,7 @@ export async function intradaySnapshot(
       // Always high: this one is not going to resolve itself, and the shift
       // still needs covering.
       alerts.push({
+        key: `no-show:${user.id}:${today}`,
         severity: 'high',
         userId: user.id,
         name: user.name,
@@ -262,6 +278,7 @@ export async function intradaySnapshot(
     }
     if (state === 'CLOCKED_OFF_EARLY') {
       alerts.push({
+        key: `left-early:${user.id}:${today}`,
         severity: 'high',
         userId: user.id,
         name: user.name,
@@ -274,6 +291,7 @@ export async function intradaySnapshot(
       const over = diffMinutes(punch!.at, now) - allowance;
       if (over > 5) {
         alerts.push({
+          key: `over-${state.toLowerCase()}:${user.id}:${today}`,
           severity: over > 15 ? 'high' : 'medium',
           userId: user.id,
           name: user.name,
@@ -285,6 +303,13 @@ export async function intradaySnapshot(
 
   const scheduledOn = people.filter((p) => p.state !== 'OFF_SHIFT').length;
   const inAdherence = people.filter((p) => p.state !== 'OFF_SHIFT' && !p.outOfAdherence).length;
+
+  // Anything a supervisor has already picked up is marked and sorted to the
+  // bottom: still visible, because it is not resolved, but out of the way of
+  // the ones nobody has taken yet.
+  const acks = await alertAcks(today);
+  for (const alert of alerts) alert.ackedBy = acks.get(alert.key)?.ackedByName ?? null;
+  alerts.sort((a, b) => Number(!!a.ackedBy) - Number(!!b.ackedBy));
 
   return {
     at: now,

@@ -129,6 +129,7 @@ export interface Timecard {
   assumedOff: boolean;
   inProgress: boolean;
   edited: boolean;
+  correctionReason: string | null;
   exceptions: string[];
   notes: string[];
   issues: Issue[];

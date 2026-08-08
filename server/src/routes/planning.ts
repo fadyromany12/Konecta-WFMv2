@@ -11,6 +11,12 @@ import { asyncRoute, HttpError } from '../middleware/errors.js';
 import { intervalsOfDay, requiredStaffing } from '../domain/forecast.js';
 import { addDays, todayStr } from '../domain/time.js';
 import { canManage, placeholders, resolveGroup, visibleUserIds } from '../services/people.js';
+import {
+  acknowledgeAlert,
+  assessLeave,
+  payrollExport,
+  releaseAlert,
+} from '../services/planning.js';
 import { intradaySnapshot } from '../services/intraday.js';
 import {
   autoSchedule,
@@ -316,5 +322,94 @@ planning.post(
 
     const result = await awardBid(Number(req.params.bidId), req.user!.id);
     res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
+// ------------------------------------------------------- coverage-aware leave
+/**
+ * What approving a time-off request would do to cover.
+ *
+ * Read-only and advisory: the screen shows it beside the Approve button, and
+ * the supervisor still decides.
+ */
+planning.get(
+  '/absence/requests/:id/impact',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const request = await db.get<any>('SELECT * FROM time_off_requests WHERE id = ?', [
+      Number(req.params.id),
+    ]);
+    if (!request) throw new HttpError(404, 'No such request.');
+    if (!(await canManage(req.user!, request.user_id))) {
+      throw new HttpError(403, 'That request is not yours to look at.');
+    }
+
+    const advisor = await db.get<{ project_id: string | null }>(
+      'SELECT project_id FROM users WHERE id = ?',
+      [request.user_id],
+    );
+    res.json(
+      await assessLeave({
+        userId: request.user_id,
+        start: request.start_date,
+        end: request.end_date,
+        userIds: await visibleUserIds(req.user!),
+        projectId: advisor?.project_id ?? req.user!.project_id,
+      }),
+    );
+  }),
+);
+
+// ------------------------------------------------------------ alert handling
+planning.post(
+  '/alerts/:key/ack',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z.object({ userId: z.number().int(), note: z.string().max(300).optional() }).parse(req.body);
+    if (!(await canManage(req.user!, body.userId))) {
+      throw new HttpError(403, 'That advisor is not on your team.');
+    }
+    const result = await acknowledgeAlert({
+      alertKey: req.params.key,
+      userId: body.userId,
+      payrollDate: todayStr(),
+      ackedBy: req.user!.id,
+      note: body.note,
+    });
+    res.json(result);
+  }),
+);
+
+planning.delete(
+  '/alerts/:key/ack',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const released = await releaseAlert(req.params.key, todayStr());
+    res.json({ ok: released, message: released ? 'Handed back.' : 'Nobody had picked that up.' });
+  }),
+);
+
+// ------------------------------------------------------------ payroll export
+/**
+ * One row per advisor, per day, per code. The last mile between this tool and
+ * whatever actually pays people.
+ */
+planning.get(
+  '/payroll/export',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? start);
+    const rows = await payrollExport({
+      userIds: await groupOf(req),
+      start,
+      end,
+      approvedOnly: req.query.approvedOnly !== 'false',
+    });
+    res.json({ rows, start, end, approvedOnly: req.query.approvedOnly !== 'false' });
   }),
 );

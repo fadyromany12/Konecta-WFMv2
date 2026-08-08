@@ -17,6 +17,26 @@ export function Absence() {
   const accruals = useAsync(() => api.get<{ accruals: any[] }>('/absence/accruals'), []);
   const requests = useAsync(() => api.get<{ requests: any[] }>('/absence/requests'), []);
 
+  // What approving each pending request would cost, fetched when a supervisor
+  // asks rather than for every row — it is several coverage computations.
+  const [impacts, setImpacts] = useState<Record<number, any>>({});
+  const [checking, setChecking] = useState<number | null>(null);
+
+  async function checkImpact(id: number) {
+    setChecking(id);
+    try {
+      const res = await api.get<any>(`/absence/requests/${id}/impact`);
+      setImpacts((current) => ({ ...current, [id]: res }));
+      if (res.severity === 'high') toast.warn(res.summary, 'Worth a look before you approve.');
+      else if (res.severity === 'watch') toast.warn(res.summary);
+      else toast.success(res.summary);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setChecking(null);
+    }
+  }
+
   const [type, setType] = useState('VACATION');
   const [start, setStart] = useState(addDays(today(), 14));
   const [end, setEnd] = useState(addDays(today(), 15));
@@ -111,7 +131,14 @@ export function Absence() {
         {accruals.data?.accruals.length === 0 && <Empty>No accrual balances are published for your region.</Empty>}
       </Card>
 
-      <Card title={user?.isSupervisor ? 'Team requests' : 'Your requests'}>
+      <Card
+        title={user?.isSupervisor ? 'Team requests' : 'Your requests'}
+        subtitle={
+          user?.isSupervisor
+            ? 'Check cover before approving — the answer is advisory, not a block.'
+            : undefined
+        }
+      >
         {requests.loading && !requests.data && <SkeletonTable rows={5} columns={6} />}
         {requests.data?.requests.length === 0 && <Empty>No requests.</Empty>}
         <div className="table-scroll">
@@ -145,10 +172,21 @@ export function Absence() {
                     <td className="nowrap">
                       {r.status === 'PENDING' && r.user_id !== user.id && (
                         <>
+                          <Button onClick={() => checkImpact(r.id)} disabled={checking === r.id}>
+                            {checking === r.id ? 'Checking…' : 'Check cover'}
+                          </Button>{' '}
                           <Button onClick={() => decide(r.id, 'APPROVED')}>Approve</Button>{' '}
                           <Button variant="danger" onClick={() => decide(r.id, 'DECLINED')}>
                             Decline
                           </Button>
+                          {impacts[r.id] && (
+                            <div
+                              className={`cover-note cover-${impacts[r.id].severity}`}
+                              role="status"
+                            >
+                              {impacts[r.id].summary}
+                            </div>
+                          )}
                         </>
                       )}
                     </td>
