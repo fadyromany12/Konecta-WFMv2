@@ -4,6 +4,7 @@ import { useSession } from './state';
 import { GuideDrawer, GuidePrompt } from './components/Guide';
 import { ThemeToggle } from './components/ThemeToggle';
 import { NotificationBell } from './components/Notifications';
+import { PulseLine } from './components/PulseLine';
 import { CommandPalette } from './components/CommandPalette';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
@@ -60,6 +61,7 @@ export function App() {
           <span className="brand-mark">
             Konecta <span>Pulse</span>
           </span>
+          <PulseLine />
           <span className="brand-sub">{catalog?.product.acronym}</span>
         </div>
         <div className="topbar-spacer" />
@@ -95,8 +97,13 @@ export function App() {
       </header>
 
       <nav className="tabs">
-        {tabs.map((tab) => (
-          <NavLink key={tab.to} to={tab.to} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
+        {tabs.map((tab, i) => (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            style={{ '--i': i } as React.CSSProperties}
+            className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}
+          >
             {tab.label}
           </NavLink>
         ))}

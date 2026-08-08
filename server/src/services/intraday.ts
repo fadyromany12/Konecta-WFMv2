@@ -15,11 +15,18 @@ import {
   SHIFT_RULE_MAP,
   type ShiftRule,
 } from '../domain/reference.js';
-import { toSegments } from '../domain/schedule.js';
+import { activeShift, shiftSpan, toSegments } from '../domain/schedule.js';
 import { INTERVAL_MINUTES } from '../domain/forecast.js';
 import { addDays, diffMinutes, nowStamp, todayStr, type DateStr, type Stamp } from '../domain/time.js';
 import { placeholders } from './people.js';
 import { getShiftsFor } from './scheduling.js';
+
+/**
+ * Past this much of a shift with no punch at all, the board stops calling it
+ * lateness. Two hours is long enough that a traffic jam or a slow start is no
+ * longer the likely explanation.
+ */
+const NO_SHOW_AFTER_MINUTES = 120;
 
 export type LiveState =
   | 'ON_PHONE'
@@ -28,6 +35,7 @@ export type LiveState =
   | 'LUNCH'
   | 'NOT_CLOCKED_ON'
   | 'LATE'
+  | 'NO_SHOW'
   | 'OFF_SHIFT'
   | 'CLOCKED_OFF_EARLY';
 
@@ -157,15 +165,26 @@ export async function intradaySnapshot(
   ]);
 
   for (const user of users) {
-    // A shift that began yesterday evening is still today's business at 02:00.
-    const segments = [
-      ...(shiftsByKey.get(`${user.id}|${yesterday}`) ?? []).flatMap((s) => toSegments(s)),
-      ...(shiftsByKey.get(`${user.id}|${today}`) ?? []).flatMap((s) => toSegments(s)),
-    ].filter((seg) => seg.endAt > `${yesterday} 12:00`);
+    // A shift that began yesterday evening is still today's business at 02:00,
+    // so both days are in scope — but each shift keeps its own span.
+    //
+    // Flattening the two days into one list of segments and taking the first
+    // was wrong in a way that only showed up on the screen: an advisor who
+    // worked yesterday and is due on again today had their lateness measured
+    // against yesterday's start, and the board reported them "1833 minutes
+    // late" — a shift that finished thirty hours ago. Lateness has to be
+    // measured against the shift the advisor is actually late for.
+    const shifts = [
+      ...(shiftsByKey.get(`${user.id}|${yesterday}`) ?? []),
+      ...(shiftsByKey.get(`${user.id}|${today}`) ?? []),
+    ].filter((shift) => shiftSpan(shift).endAt > `${yesterday} 12:00`);
 
+    const active = activeShift(shifts, now, today);
+    const span = active ? shiftSpan(active) : null;
+    const segments = active ? toSegments(active) : [];
     const current = segments.find((seg) => seg.startAt <= now && seg.endAt > now);
-    const shiftStart = segments[0]?.startAt ?? null;
-    const shiftEnd = segments[segments.length - 1]?.endAt ?? null;
+    const shiftStart = span?.startAt ?? null;
+    const shiftEnd = span?.endAt ?? null;
     const onShift = !!current;
 
     const punch = latest.get(user.id);
@@ -186,7 +205,13 @@ export async function intradaySnapshot(
       const late = shiftStart ? diffMinutes(shiftStart, now) : 0;
       if (late > rule.lateGraceMinutes) {
         // Clocked off before the end counts differently to never having arrived.
-        state = punch?.type === 'OFF' ? 'CLOCKED_OFF_EARLY' : 'LATE';
+        // And past a point, "late" stops being the truth: somebody who was due
+        // at nine and has not appeared by four is not running late, they have
+        // not come in. Calling that "401 minutes late" is arithmetic rather
+        // than information, and it is a different conversation for the
+        // supervisor — chasing versus covering the shift.
+        if (punch?.type === 'OFF') state = 'CLOCKED_OFF_EARLY';
+        else state = late >= NO_SHOW_AFTER_MINUTES ? 'NO_SHOW' : 'LATE';
         minutesLate = late;
       } else {
         state = 'NOT_CLOCKED_ON';
@@ -225,6 +250,16 @@ export async function intradaySnapshot(
         message: `${minutesLate} minutes late and not clocked on.`,
       });
     }
+    if (state === 'NO_SHOW') {
+      // Always high: this one is not going to resolve itself, and the shift
+      // still needs covering.
+      alerts.push({
+        severity: 'high',
+        userId: user.id,
+        name: user.name,
+        message: `has not clocked on at all${shiftStart ? `, due ${shiftStart.slice(11)}` : ''}. Cover the shift.`,
+      });
+    }
     if (state === 'CLOCKED_OFF_EARLY') {
       alerts.push({
         severity: 'high',
@@ -260,7 +295,7 @@ export async function intradaySnapshot(
       onPhone: people.filter((p) => p.state === 'ON_PHONE').length,
       onBreakOrLunch: people.filter((p) => p.state === 'BREAK' || p.state === 'LUNCH').length,
       notClockedOn: people.filter((p) => p.state === 'NOT_CLOCKED_ON').length,
-      late: people.filter((p) => p.state === 'LATE').length,
+      late: people.filter((p) => p.state === 'LATE' || p.state === 'NO_SHOW').length,
       outOfAdherence: people.filter((p) => p.outOfAdherence).length,
       adherencePct: scheduledOn === 0 ? 100 : Math.round((inAdherence / scheduledOn) * 1000) / 10,
     },

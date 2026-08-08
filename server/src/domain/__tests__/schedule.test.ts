@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activeShift,
   addShift,
   clockOnWindow,
   deleteRow,
@@ -124,5 +125,57 @@ describe('derived figures', () => {
   it('opens the clock window ahead of the shift by the rule lead time', () => {
     const window = clockOnWindow([overnight()], SHIFT_RULE_MAP.get('CR1')!.clockOnLeadMinutes);
     expect(window?.earliest).toBe('2026-03-01 22:45');
+  });
+});
+
+describe('which shift a moment belongs to', () => {
+  // The live board reads two days at once, so "when were they due on?" has to
+  // be answered per shift rather than across the whole window.
+  const day = (date: string, start: string, end: string): ScheduleShift => ({
+    shiftNo: 1,
+    rows: [{ startAt: `${date} ${start}`, activityKey: 'SHIFT_START' }],
+    endAt: `${end.length > 5 ? end : `${date} ${end}`}`,
+  });
+
+  it('picks the shift containing the moment', () => {
+    const shifts = [day('2025-06-10', '09:00', '17:00'), day('2025-06-11', '09:00', '17:00')];
+    const active = activeShift(shifts, '2025-06-11 10:30', '2025-06-11');
+    expect(active?.rows[0].startAt).toBe('2025-06-11 09:00');
+  });
+
+  it('never measures against a shift that already ended', () => {
+    // The bug this exists to prevent: yesterday's shift being treated as the
+    // one today's advisor is late for, which read as 1833 minutes late.
+    const shifts = [day('2025-06-10', '09:00', '17:00'), day('2025-06-11', '09:00', '17:00')];
+    const active = activeShift(shifts, '2025-06-11 09:20', '2025-06-11');
+    expect(active?.rows[0].startAt).toBe('2025-06-11 09:00');
+    expect(active?.rows[0].startAt).not.toBe('2025-06-10 09:00');
+  });
+
+  it('falls forward to the next shift due today when between shifts', () => {
+    const shifts = [day('2025-06-11', '14:00', '22:00')];
+    const active = activeShift(shifts, '2025-06-11 08:00', '2025-06-11');
+    expect(active?.rows[0].startAt).toBe('2025-06-11 14:00');
+  });
+
+  it('returns nothing once every shift has finished', () => {
+    const shifts = [day('2025-06-10', '09:00', '17:00')];
+    expect(activeShift(shifts, '2025-06-11 08:00', '2025-06-11')).toBeNull();
+  });
+
+  it('keeps an overnight shift current after midnight', () => {
+    const overnight: ScheduleShift = {
+      shiftNo: 1,
+      rows: [{ startAt: '2025-06-10 23:00', activityKey: 'SHIFT_START' }],
+      endAt: '2025-06-11 07:30',
+    };
+    const active = activeShift([overnight], '2025-06-11 02:00', '2025-06-11');
+    expect(active?.rows[0].startAt).toBe('2025-06-10 23:00');
+  });
+
+  it('prefers the containing shift over a later one on the same day', () => {
+    const shifts = [day('2025-06-11', '06:00', '14:00'), day('2025-06-11', '18:00', '22:00')];
+    const active = activeShift(shifts, '2025-06-11 09:00', '2025-06-11');
+    expect(active?.rows[0].startAt).toBe('2025-06-11 06:00');
   });
 });

@@ -290,10 +290,20 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
     const dow = new Date(date + 'T00:00:00Z').getUTCDay();
     const weekend = dow === 5 || dow === 6; // Friday & Saturday weekend
 
+    // A contact centre does not close at the weekend, it runs thinner — and a
+    // seed that empties the roster on Friday and Saturday means the live board
+    // is blank for two days in seven, which reads as a broken screen rather
+    // than a quiet one. Roughly the first half of each team covers weekends,
+    // on rotation so it is not always the same people.
+    const weekendCrew = new Set([
+      ...nightAdvisors.filter((_, i) => (i + Math.abs(offset)) % 2 === 0),
+      ...dayAdvisors.filter((_, i) => (i + Math.abs(offset)) % 2 === 0),
+    ]);
+
     for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
       const night = nightAdvisors.includes(userId);
       const isNewHire = newHires.includes(userId);
-      if (weekend && !isNewHire) continue;
+      if (weekend && !isNewHire && !weekendCrew.has(userId)) continue;
       if (isNewHire && offset < -9) continue;
 
       const template = night ? NIGHT_SHIFT : DAY_SHIFT;

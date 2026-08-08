@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAsync, useSession } from '../state';
 import { useLive, useLiveEvent } from '../live';
+import { Ticker } from '../components/Ticker';
 import {
   Banner,
   Button,
@@ -53,6 +54,7 @@ const STATE_LABELS: Record<string, string> = {
   LUNCH: 'Lunch',
   NOT_CLOCKED_ON: 'Not on yet',
   LATE: 'Late',
+  NO_SHOW: 'No show',
   OFF_SHIFT: 'Off shift',
   CLOCKED_OFF_EARLY: 'Left early',
 };
@@ -142,28 +144,33 @@ function CommandCentre() {
 
       {totals && (
         <div className="kpis">
-          <Kpi label="On shift now" value={totals.scheduledOn} hint={`${totals.clockedOn} clocked on`} />
+          <Kpi index={0} label="On shift now" value={totals.scheduledOn} hint={`${totals.clockedOn} clocked on`} />
           <Kpi
+            index={1}
             label="On the phone"
             value={totals.onPhone}
             hint={`${totals.onBreakOrLunch} on break or lunch`}
             tone={totals.onPhone === 0 && totals.scheduledOn > 0 ? 'warn' : undefined}
           />
           <Kpi
+            index={2}
             label="Not clocked on"
             value={totals.notClockedOn + totals.late}
             hint={totals.late > 0 ? `${totals.late} already late` : 'all accounted for'}
             tone={totals.late > 0 ? 'error' : totals.notClockedOn > 0 ? 'warn' : 'good'}
           />
           <Kpi
+            index={3}
             label="Out of adherence"
             value={totals.outOfAdherence}
             hint="doing something unplanned"
             tone={totals.outOfAdherence > 2 ? 'warn' : 'good'}
           />
           <Kpi
+            index={4}
             label="Live adherence"
-            value={`${totals.adherencePct}%`}
+            value={totals.adherencePct}
+            suffix="%"
             hint="of those on shift"
             tone={totals.adherencePct >= 90 ? 'good' : totals.adherencePct >= 80 ? 'warn' : 'error'}
           />
@@ -177,9 +184,10 @@ function CommandCentre() {
         >
           {onShift.length === 0 && !live.loading && <Empty>Nobody is scheduled at this moment.</Empty>}
           <div className="board">
-            {onShift.map((person) => (
+            {onShift.map((person, i) => (
               <div
                 key={person.userId}
+                style={{ '--i': Math.min(i, 24) } as React.CSSProperties}
                 className={`board-cell board-${person.state} ${person.outOfAdherence ? 'board-out' : ''}`}
                 title={
                   person.scheduledActivity
@@ -191,7 +199,12 @@ function CommandCentre() {
                 <div className="board-state">
                   {STATE_LABELS[person.state] ?? person.state}
                   {person.minutesInState > 0 ? ` · ${person.minutesInState}m` : ''}
-                  {person.minutesLate ? ` · ${person.minutesLate}m late` : ''}
+                  {/* A no-show already says everything the minute count would;
+                      "No show · 403m late" is the same fact told twice, the
+                      second time in a unit nobody needs. */}
+                  {person.state === 'LATE' && person.minutesLate
+                    ? ` · ${person.minutesLate}m late`
+                    : ''}
                 </div>
                 {person.outOfAdherence && person.scheduledActivity && (
                   <div className="muted" style={{ fontSize: '0.68rem' }}>
@@ -269,16 +282,22 @@ function Kpi({
   value,
   hint,
   tone,
+  index = 0,
+  suffix = '',
 }: {
   label: string;
-  value: string | number;
+  value: number;
   hint?: string;
   tone?: string;
+  index?: number;
+  suffix?: string;
 }) {
   return (
-    <div className={`kpi ${tone ? `kpi-${tone}` : ''}`}>
+    <div className={`kpi ${tone ? `kpi-${tone}` : ''}`} style={{ '--i': index } as React.CSSProperties}>
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value}</div>
+      <div className="kpi-value">
+        <Ticker value={value} format={(n) => `${n}${suffix}`} />
+      </div>
       {hint && <div className="kpi-hint">{hint}</div>}
     </div>
   );

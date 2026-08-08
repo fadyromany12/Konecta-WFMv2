@@ -1663,6 +1663,14 @@ html[data-theme='light'] .stamp-date {
 .board-CLOCKED_OFF_EARLY {
   border-left: 3px solid var(--error);
 }
+
+/* A no-show is not a louder version of late — it is a different problem, and
+   the supervisor's next move is to cover the shift rather than send a message.
+   Filled rather than outlined, so it separates at a glance on a busy board. */
+.board-NO_SHOW {
+  border-left: 3px solid var(--error);
+  background: color-mix(in oklab, var(--error) 16%, transparent);
+}
 .board-OFF_SHIFT {
   opacity: 0.42;
   border-left: 3px solid transparent;
@@ -2759,5 +2767,310 @@ html[data-theme='light'] .guide-scrim {
   .skeleton-cell,
   .skeleton-chart span {
     background: var(--glass-sunken);
+  }
+}
+
+/* =========================================================================
+ * Motion, second pass: making it feel like a pulse.
+ *
+ * The first pass animated arrivals — things rose into place and that was the
+ * end of it. What was missing is motion that carries information: a figure that
+ * moves when it changes, a chart that draws in the order the data reads, a
+ * trace that beats when the stream actually delivers something. Decoration is
+ * what you notice; this is meant to be what you understand.
+ *
+ * Everything below animates only `transform`, `opacity` and `stroke-dashoffset`
+ * — all compositor properties — so a dense screen does not drop frames while a
+ * supervisor is reading a timecard.
+ * ========================================================================= */
+
+/* ------------------------------------------------------------ the stagger --
+ * One convention: an element carrying `--i` waits that many steps before it
+ * arrives. Used by KPIs, board cells, tabs and bar lists so everything on a
+ * screen resolves in the same rhythm rather than each area inventing its own.
+ */
+.kpi,
+.board-cell,
+.barlist li {
+  animation: rise-in 520ms var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 38ms);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+.tabs .tab {
+  animation: tab-in 420ms var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 34ms);
+}
+
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* ---------------------------------------------------------- the pulse line --
+ * A heartbeat trace beside the wordmark. Two copies of the same path scroll
+ * left, one starting a full width behind the other, so the loop never shows a
+ * seam. It reads as alive when the stream is up and flattens when it is not,
+ * which makes it a status light people actually believe.
+ */
+.pulseline {
+  width: 4.5rem;
+  height: 1.4rem;
+  margin-left: 0.1rem;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  transition: opacity var(--dur) var(--ease-soft);
+}
+
+.pulseline svg {
+  width: 200%;
+  height: 100%;
+  display: block;
+}
+
+.pulseline-trace {
+  fill: none;
+  stroke: var(--k-cyan);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation: pulse-scroll 5.2s linear infinite;
+}
+
+/* The second copy is offset by exactly one period, so as the first leaves the
+   mask the second is already in place. */
+.pulseline-trace-2 {
+  animation-delay: -2.6s;
+}
+
+@keyframes pulse-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* No stream: the trace slows almost to a stop and loses its colour, which is
+   the honest reading of "this is not live". */
+.pulseline.is-idle {
+  opacity: 0.4;
+}
+
+.pulseline.is-idle .pulseline-trace {
+  stroke: var(--text-faint);
+  animation-duration: 16s;
+}
+
+/* An event just landed: brighten and quicken for a couple of seconds. */
+.pulseline.is-excited .pulseline-trace {
+  stroke: var(--k-aqua);
+  animation-duration: 2.4s;
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--k-aqua) 55%, transparent));
+}
+
+html[data-theme='light'] .pulseline-trace {
+  stroke: var(--k-indigo);
+}
+
+html[data-theme='light'] .pulseline.is-excited .pulseline-trace {
+  stroke: var(--k-teal);
+}
+
+/* ---------------------------------------------------------- charts in motion */
+
+/* A line that draws itself along its own length. The dash array is set long
+   enough to cover any path this app produces; exactness does not matter
+   because the offset lands on zero either way. */
+.chart-draw {
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: chart-draw 1100ms var(--ease) forwards;
+}
+
+@keyframes chart-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.chart-area {
+  animation: fade 700ms var(--ease-soft) both;
+}
+
+.chart-bar {
+  animation: bar-grow 620ms var(--ease) both;
+}
+
+@keyframes bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+.barlist-fill {
+  animation: bar-slide 640ms var(--ease) both;
+  transform-origin: left center;
+}
+
+@keyframes bar-slide {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* The gauge arc travels to a new reading rather than jumping to it. */
+.gauge-value {
+  transition: stroke-dasharray 720ms var(--ease);
+}
+
+.gauge-number {
+  transition: fill var(--dur) var(--ease-soft);
+}
+
+/* ------------------------------------------------------- micro-interactions */
+
+/* Buttons take a real press. A 1px drop is the difference between a control
+   that responds and one that merely changes colour. */
+.btn {
+  transition:
+    transform var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease-soft),
+    border-color var(--dur) var(--ease-soft),
+    box-shadow var(--dur) var(--ease-soft);
+}
+
+.btn:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.985);
+  transition-duration: 60ms;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* One focus treatment everywhere, and only for keyboard users. Losing the
+   outline entirely is the most common way an otherwise careful interface
+   becomes unusable without a mouse. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* Table rows lift very slightly under the pointer, so the eye can hold its
+   place across a wide row of figures. */
+tbody tr {
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    box-shadow var(--dur-fast) var(--ease-soft);
+}
+
+tbody tr:hover {
+  background: color-mix(in oklab, var(--k-violet) 9%, transparent);
+}
+
+/* The live board: a cell whose state changed should be seen changing. */
+.board-cell {
+  transition:
+    background var(--dur) var(--ease-soft),
+    border-color var(--dur) var(--ease-soft),
+    transform var(--dur-fast) var(--ease);
+}
+
+.board-cell:hover {
+  transform: translateY(-2px);
+  z-index: 1;
+}
+
+/* Anything genuinely urgent breathes rather than blinks — a slow pulse reads
+   as attention, a fast one as an alarm, and almost nothing here is an alarm. */
+.board-out,
+.kpi-error .kpi-value {
+  animation: breathe 3.4s var(--ease-soft) infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+
+/* Cards arrive together but not identically, which keeps a long screen from
+   looking like one block sliding up. */
+.card {
+  animation: card-in 560ms var(--ease) both;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.grid-2 > *:nth-child(2) .card,
+.grid-2 > *:nth-child(2) {
+  animation-delay: 70ms;
+}
+
+/* Stat blocks in a toolbar count as one group. */
+.stat {
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.stat:hover {
+  transform: translateY(-1px);
+}
+
+/* --------------------------------------------------------- reduced motion --
+ * The second pass adds continuous animation, which is exactly what someone
+ * asking for less movement wants stopped. The pulse line keeps its colour so it
+ * still says whether the stream is live; it simply stops moving.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .pulseline-trace,
+  .board-out,
+  .kpi-error .kpi-value,
+  .chart-bar,
+  .barlist-fill,
+  .chart-draw,
+  .chart-area,
+  .kpi,
+  .board-cell,
+  .barlist li,
+  .tabs .tab,
+  .card {
+    animation: none !important;
+  }
+
+  .chart-draw {
+    stroke-dashoffset: 0;
+  }
+
+  .btn:not(:disabled):hover,
+  .btn:not(:disabled):active,
+  .board-cell:hover,
+  .stat:hover {
+    transform: none;
   }
 }

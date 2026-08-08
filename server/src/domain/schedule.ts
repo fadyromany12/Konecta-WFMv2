@@ -225,3 +225,34 @@ function minutesToStamp(mins: number): Stamp {
   const mm = String(rem % 60).padStart(2, '0');
   return `${date} ${hh}:${mm}`;
 }
+
+/**
+ * Which shift a given moment belongs to.
+ *
+ * The live board looks at two days at once, because a shift that began
+ * yesterday evening is still today's business at 02:00. That makes "when was
+ * this person due to start?" ambiguous, and getting it wrong is not subtle: the
+ * first version took the earliest segment across the whole window, so an
+ * advisor who worked yesterday and is due on again today was reported as 1833
+ * minutes late — measured against a shift that had finished thirty hours
+ * earlier.
+ *
+ * The moment belongs to the shift that contains it. Failing that, to the next
+ * shift due to start on `today`, so a screen can still say when someone is
+ * expected. Never to a shift that has already ended.
+ */
+export function activeShift(
+  shifts: ScheduleShift[],
+  now: Stamp,
+  today: DateStr,
+): ScheduleShift | null {
+  const spans = shifts
+    .map((shift) => ({ shift, span: shiftSpan(shift) }))
+    .sort((a, b) => a.span.startAt.localeCompare(b.span.startAt));
+
+  const containing = spans.find((s) => s.span.startAt <= now && s.span.endAt > now);
+  if (containing) return containing.shift;
+
+  const upcoming = spans.find((s) => s.span.startAt > now && s.span.startAt.slice(0, 10) === today);
+  return upcoming?.shift ?? null;
+}

@@ -1,6 +1,13 @@
 /**
  * Charts, drawn as plain SVG.
  *
+ * They animate in rather than appearing complete: a line draws itself along its
+ * own length, bars grow from the baseline, an arc sweeps to its value. That is
+ * not decoration — it makes the shape of the data legible in the order it
+ * matters, left to right through the day, and it gives the eye somewhere to
+ * land when a screen redraws after a live update. All of it is disabled under
+ * prefers-reduced-motion, where the finished chart simply appears.
+ *
  * No charting library: the shapes needed here are a line, an area, some bars
  * and a donut, and hand-drawn SVG keeps the bundle small, the styling
  * consistent with the rest of the interface, and the colours tied to the same
@@ -92,6 +99,8 @@ export function LineChart({
               <path
                 d={`${linePath(s.values, max)} L ${scaleX(count - 1, count)} ${100 - PAD.bottom} L ${PAD.left} ${100 - PAD.bottom} Z`}
                 fill={`url(#${gradientId}-${i})`}
+                className="chart-area"
+                style={{ animationDelay: `${i * 120 + 160}ms` }}
               />
             )}
             <path
@@ -103,6 +112,10 @@ export function LineChart({
               strokeLinecap="round"
               strokeDasharray={s.dashed ? '4 3' : undefined}
               vectorEffect="non-scaling-stroke"
+              // A dashed series is already using strokeDasharray to be dashed,
+              // so only solid lines can borrow it to draw themselves.
+              className={s.dashed ? undefined : 'chart-draw'}
+              style={{ animationDelay: `${i * 120}ms` }}
             />
           </g>
         ))}
@@ -181,7 +194,13 @@ export function CoverageChart({
               y={y}
               width={barWidth}
               height={Math.max(0, 100 - PAD.bottom - y)}
-              className={short ? 'bar-short' : 'bar-ok'}
+              className={`chart-bar ${short ? 'bar-short' : 'bar-ok'}`}
+              // Scaling from the baseline rather than the box centre, so a bar
+              // grows out of the axis the way the eye expects.
+              style={{
+                transformOrigin: `0 ${100 - PAD.bottom}px`,
+                animationDelay: `${Math.min(i * 14, 420)}ms`,
+              }}
             />
           );
         })}
@@ -192,6 +211,8 @@ export function CoverageChart({
           stroke="var(--warn)"
           strokeWidth="2"
           vectorEffect="non-scaling-stroke"
+          className="chart-draw"
+          style={{ animationDelay: '220ms' }}
         />
       </svg>
 
@@ -231,15 +252,15 @@ export function BarList({
 
   return (
     <ul className="barlist">
-      {items.map((item) => (
-        <li key={item.label}>
+      {items.map((item, i) => (
+        <li key={item.label} style={{ '--i': i } as React.CSSProperties}>
           <span className="barlist-label" title={item.hint}>
             {item.label}
           </span>
           <span className="barlist-track">
             <span
               className={`barlist-fill ${item.tone ? `barlist-${item.tone}` : ''}`}
-              style={{ width: `${(item.value / max) * 100}%` }}
+              style={{ width: `${(item.value / max) * 100}%`, animationDelay: `${i * 70}ms` }}
             />
           </span>
           <span className="barlist-value num">{formatValue(item.value)}</span>
@@ -274,6 +295,9 @@ export function Gauge({
           className={`gauge-value gauge-${tone}`}
           strokeDasharray={`${dash} ${circumference}`}
           transform="rotate(-90 50 50)"
+          // Transitioning the dash offset is what makes the arc travel to a new
+          // reading instead of jumping when live figures update.
+          style={{ strokeDashoffset: 0 }}
         />
         <text x="50" y="49" className="gauge-number">
           {Math.round(clamped)}
