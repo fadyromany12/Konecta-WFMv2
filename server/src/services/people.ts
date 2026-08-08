@@ -8,9 +8,11 @@
  * adds the delegator's team on top for as long as the delegation stands.
  */
 
-import { db } from '../db/index.js';
+import { db, placeholders } from '../db/index.js';
 import { SHIFT_RULE_MAP, DEFAULT_SHIFT_RULE, type Role, type ShiftRule } from '../domain/reference.js';
 import { diffDays, type DateStr } from '../domain/time.js';
+
+export { placeholders };
 
 export interface UserRow {
   id: number;
@@ -27,69 +29,96 @@ export interface UserRow {
   hire_date: string | null;
 }
 
-export function getUser(id: number): UserRow | undefined {
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
+export function getUser(id: number): Promise<UserRow | undefined> {
+  return db.get<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
 }
 
-export function getUserByEmail(email: string): (UserRow & { password_hash: string }) | undefined {
-  return db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(email) as
-    | (UserRow & { password_hash: string })
-    | undefined;
+export function getUserByEmail(email: string): Promise<(UserRow & { password_hash: string }) | undefined> {
+  return db.get<UserRow & { password_hash: string }>('SELECT * FROM users WHERE lower(email) = lower(?)', [
+    email,
+  ]);
 }
 
-export function getUserByEmployeeId(employeeId: string): UserRow | undefined {
-  return db.prepare('SELECT * FROM users WHERE employee_id = ?').get(employeeId) as UserRow | undefined;
+export function getUserByEmployeeId(employeeId: string): Promise<UserRow | undefined> {
+  return db.get<UserRow>('SELECT * FROM users WHERE employee_id = ?', [employeeId]);
 }
 
-function directReports(id: number): number[] {
-  return (db.prepare('SELECT id FROM users WHERE manager_id = ?').all(id) as { id: number }[]).map((r) => r.id);
+/**
+ * The whole hierarchy, read once.
+ *
+ * The previous version walked the tree with one query per node, which is fine
+ * against a local SQLite file and ruinous against a database across a network:
+ * a seventeen-person org became seventeen round trips before a single screen
+ * could be drawn. One read builds the parent map, and every descendant question
+ * is then answered in memory.
+ */
+async function reportingMap(): Promise<Map<number, number[]>> {
+  const rows = await db.all<{ id: number; manager_id: number | null }>(
+    'SELECT id, manager_id FROM users',
+  );
+  const children = new Map<number, number[]>();
+  for (const row of rows) {
+    if (row.manager_id === null) continue;
+    const list = children.get(row.manager_id);
+    if (list) list.push(row.id);
+    else children.set(row.manager_id, [row.id]);
+  }
+  return children;
 }
 
-/** Everyone below this user in the hierarchy, at any depth. */
-export function descendants(id: number): number[] {
+function descendantsOf(children: Map<number, number[]>, id: number): number[] {
   const seen = new Set<number>();
-  const queue = [...directReports(id)];
+  const queue = [...(children.get(id) ?? [])];
   while (queue.length > 0) {
     const next = queue.shift()!;
     if (seen.has(next)) continue;
     seen.add(next);
-    queue.push(...directReports(next));
+    queue.push(...(children.get(next) ?? []));
   }
   return [...seen];
 }
 
-/** Users who have delegated their team to this user. */
-export function delegators(id: number): number[] {
-  return (
-    db.prepare('SELECT user_id FROM alternates WHERE alternate_user_id = ?').all(id) as { user_id: number }[]
-  ).map((r) => r.user_id);
+/** Everyone below this user in the hierarchy, at any depth. */
+export async function descendants(id: number): Promise<number[]> {
+  return descendantsOf(await reportingMap(), id);
 }
 
-export function visibleUserIds(viewer: UserRow): number[] {
+/** Users who have delegated their team to this user. */
+export async function delegators(id: number): Promise<number[]> {
+  const rows = await db.all<{ user_id: number }>(
+    'SELECT user_id FROM alternates WHERE alternate_user_id = ?',
+    [id],
+  );
+  return rows.map((r) => r.user_id);
+}
+
+export async function visibleUserIds(viewer: UserRow): Promise<number[]> {
   if (viewer.role === 'ADMIN') {
-    return (db.prepare('SELECT id FROM users').all() as { id: number }[]).map((r) => r.id);
+    const rows = await db.all<{ id: number }>('SELECT id FROM users');
+    return rows.map((r) => r.id);
   }
 
-  const ids = new Set<number>([viewer.id, ...descendants(viewer.id)]);
+  const [children, delegatedBy] = await Promise.all([reportingMap(), delegators(viewer.id)]);
+  const ids = new Set<number>([viewer.id, ...descendantsOf(children, viewer.id)]);
 
   // Peers reporting up to the same second-level manager.
   if (viewer.manager_id) {
-    const manager = getUser(viewer.manager_id);
+    const manager = await getUser(viewer.manager_id);
     const secondLevel = manager?.manager_id ?? manager?.id ?? null;
-    if (secondLevel) for (const id of descendants(secondLevel)) ids.add(id);
+    if (secondLevel) for (const id of descendantsOf(children, secondLevel)) ids.add(id);
   }
 
-  for (const delegatorId of delegators(viewer.id)) {
+  for (const delegatorId of delegatedBy) {
     ids.add(delegatorId);
-    for (const id of descendants(delegatorId)) ids.add(id);
+    for (const id of descendantsOf(children, delegatorId)) ids.add(id);
   }
 
   return [...ids];
 }
 
-export function canManage(viewer: UserRow, targetId: number): boolean {
+export async function canManage(viewer: UserRow, targetId: number): Promise<boolean> {
   if (viewer.id === targetId) return true;
-  return visibleUserIds(viewer).includes(targetId);
+  return (await visibleUserIds(viewer)).includes(targetId);
 }
 
 export interface GroupSummary {
@@ -104,23 +133,24 @@ export interface GroupSummary {
  * delegated teams `ALT_`, so the prefix alone tells a user where a group came
  * from and whether they can delete it.
  */
-export function listGroups(viewer: UserRow): GroupSummary[] {
+export async function listGroups(viewer: UserRow): Promise<GroupSummary[]> {
   const groups: GroupSummary[] = [];
-  const visible = new Set(visibleUserIds(viewer));
+  const visibleIds = await visibleUserIds(viewer);
+  const visible = new Set(visibleIds);
+  const children = await reportingMap();
 
   groups.push({ key: '-Me', name: '-Me', type: 'SELF', memberIds: [viewer.id] });
 
   // One system group per supervisor whose team the viewer can see.
-  const supervisors = db
-    .prepare(
-      `SELECT DISTINCT m.id, m.employee_id, m.name
-       FROM users u JOIN users m ON m.id = u.manager_id
-       WHERE u.id IN (${placeholders(visible.size)})`,
-    )
-    .all(...visible) as { id: number; employee_id: string; name: string }[];
+  const supervisors = await db.all<{ id: number; employee_id: string; name: string }>(
+    `SELECT DISTINCT m.id, m.employee_id, m.name
+     FROM users u JOIN users m ON m.id = u.manager_id
+     WHERE u.id IN (${placeholders(visible.size)})`,
+    visibleIds,
+  );
 
   for (const sup of supervisors) {
-    const members = descendants(sup.id).filter((id) => visible.has(id));
+    const members = descendantsOf(children, sup.id).filter((id) => visible.has(id));
     if (members.length === 0) continue;
     groups.push({
       key: `--${sup.employee_id}`,
@@ -130,42 +160,41 @@ export function listGroups(viewer: UserRow): GroupSummary[] {
     });
   }
 
-  for (const delegatorId of delegators(viewer.id)) {
-    const delegator = getUser(delegatorId);
+  for (const delegatorId of await delegators(viewer.id)) {
+    const delegator = await getUser(delegatorId);
     if (!delegator) continue;
     groups.push({
       key: `ALT_${delegator.employee_id}`,
       name: `ALT_${delegator.employee_id} ${delegator.name}`,
       type: 'ALT',
-      memberIds: [delegatorId, ...descendants(delegatorId)],
+      memberIds: [delegatorId, ...descendantsOf(children, delegatorId)],
     });
   }
 
-  const custom = db.prepare('SELECT id, name FROM groups WHERE owner_id = ? AND type = ?').all(
-    viewer.id,
-    'CUSTOM',
-  ) as { id: number; name: string }[];
+  const custom = await db.all<{ id: number; name: string }>(
+    'SELECT id, name FROM groups WHERE owner_id = ? AND type = ?',
+    [viewer.id, 'CUSTOM'],
+  );
 
   for (const group of custom) {
-    const members = (
-      db.prepare('SELECT user_id FROM group_members WHERE group_id = ?').all(group.id) as {
-        user_id: number;
-      }[]
-    ).map((r) => r.user_id);
+    const rows = await db.all<{ user_id: number }>(
+      'SELECT user_id FROM group_members WHERE group_id = ?',
+      [group.id],
+    );
     groups.push({
       key: `-${group.name}`,
       name: `-${group.name}`,
       type: 'CUSTOM',
-      memberIds: members.filter((id) => visible.has(id)),
+      memberIds: rows.map((r) => r.user_id).filter((id) => visible.has(id)),
     });
   }
 
   return groups;
 }
 
-export function resolveGroup(viewer: UserRow, key: string | undefined): number[] {
+export async function resolveGroup(viewer: UserRow, key: string | undefined): Promise<number[]> {
   if (!key || key === 'ALL') return visibleUserIds(viewer);
-  const group = listGroups(viewer).find((g) => g.key === key);
+  const group = (await listGroups(viewer)).find((g) => g.key === key);
   return group ? group.memberIds : [];
 }
 
@@ -174,31 +203,27 @@ export function resolveGroup(viewer: UserRow, key: string | undefined): number[]
  * future-dated records, so history stays intact and a rule change never
  * retroactively rewrites how a past shift was judged.
  */
-export function effectiveShiftRule(userId: number, date: DateStr): ShiftRule {
-  const user = getUser(userId);
-  const change = db
-    .prepare(
+export async function effectiveShiftRule(userId: number, date: DateStr): Promise<ShiftRule> {
+  const [user, change] = await Promise.all([
+    getUser(userId),
+    db.get<{ shift_rule: string }>(
       `SELECT shift_rule FROM shift_rule_changes
        WHERE user_id = ? AND effective_date <= ?
        ORDER BY effective_date DESC, id DESC LIMIT 1`,
-    )
-    .get(userId, date) as { shift_rule: string } | undefined;
+      [userId, date],
+    ),
+  ]);
 
   const code = change?.shift_rule ?? user?.shift_rule ?? DEFAULT_SHIFT_RULE;
   return SHIFT_RULE_MAP.get(code) ?? SHIFT_RULE_MAP.get(DEFAULT_SHIFT_RULE)!;
 }
 
-export function pendingShiftRuleChanges(userId: number, today: DateStr) {
-  return db
-    .prepare(
-      `SELECT c.*, u.name AS created_by_name FROM shift_rule_changes c
-       JOIN users u ON u.id = c.created_by
-       WHERE c.user_id = ? ORDER BY c.effective_date DESC LIMIT 20`,
-    )
-    .all(userId)
-    .map((row: any) => ({ ...row, pending: diffDays(today, row.effective_date) > 0 }));
-}
-
-export function placeholders(n: number): string {
-  return n === 0 ? 'NULL' : new Array(n).fill('?').join(',');
+export async function pendingShiftRuleChanges(userId: number, today: DateStr) {
+  const rows = await db.all<any>(
+    `SELECT c.*, u.name AS created_by_name FROM shift_rule_changes c
+     JOIN users u ON u.id = c.created_by
+     WHERE c.user_id = ? ORDER BY c.effective_date DESC LIMIT 20`,
+    [userId],
+  );
+  return rows.map((row) => ({ ...row, pending: diffDays(today, row.effective_date) > 0 }));
 }

@@ -10,7 +10,7 @@ import { authenticate, requireSupervisor } from '../middleware/auth.js';
 import { asyncRoute, HttpError } from '../middleware/errors.js';
 import { intervalsOfDay, requiredStaffing } from '../domain/forecast.js';
 import { addDays, todayStr } from '../domain/time.js';
-import { canManage, resolveGroup, visibleUserIds } from '../services/people.js';
+import { canManage, placeholders, resolveGroup, visibleUserIds } from '../services/people.js';
 import { intradaySnapshot } from '../services/intraday.js';
 import {
   autoSchedule,
@@ -38,7 +38,7 @@ export const planning = Router();
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD date');
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Times use a 24 hour clock');
 
-function groupOf(req: any): number[] {
+function groupOf(req: any): Promise<number[]> {
   const group = typeof req.query.group === 'string' ? req.query.group : undefined;
   return resolveGroup(req.user!, group);
 }
@@ -52,24 +52,37 @@ function projectOf(req: any): string {
 }
 
 // ---------------------------------------------------------------- intraday
-planning.get('/intraday', authenticate, requireSupervisor, (req, res) => {
-  res.json(intradaySnapshot(groupOf(req)));
-});
+planning.get(
+  '/intraday',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    res.json(await intradaySnapshot(await groupOf(req)));
+  }),
+);
 
 // ---------------------------------------------------------------- forecast
-planning.get('/forecast', authenticate, requireSupervisor, (req, res) => {
-  const date = dateSchema.parse(req.query.date ?? todayStr());
-  const projectId = projectOf(req);
-  const userIds = groupOf(req);
-  const result = coverageFor({ projectId, date, userIds });
-  res.json({ ...result, projectId, forecast: getForecast(projectId, date) });
-});
+planning.get(
+  '/forecast',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const projectId = projectOf(req);
+    const userIds = await groupOf(req);
+    const [result, forecast] = await Promise.all([
+      coverageFor({ projectId, date, userIds }),
+      getForecast(projectId, date),
+    ]);
+    res.json({ ...result, projectId, forecast });
+  }),
+);
 
 planning.put(
   '/forecast',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z
       .object({
         date: dateSchema,
@@ -87,10 +100,10 @@ planning.put(
     const projectId = body.project ?? req.user!.project_id;
     if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
 
-    saveForecast(projectId, body.date, body.rows, req.user!.id);
+    await saveForecast(projectId, body.date, body.rows, req.user!.id);
     res.json({
       ok: true,
-      ...coverageFor({ projectId, date: body.date, userIds: visibleUserIds(req.user!) }),
+      ...(await coverageFor({ projectId, date: body.date, userIds: await visibleUserIds(req.user!) })),
     });
   }),
 );
@@ -99,7 +112,7 @@ planning.put(
   '/forecast/settings',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z
       .object({
         project: z.string().optional(),
@@ -110,8 +123,8 @@ planning.put(
       .parse(req.body);
     const projectId = body.project ?? req.user!.project_id;
     if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
-    saveSettings(projectId, body, req.user!.id);
-    res.json({ ok: true, settings: getSettings(projectId) });
+    await saveSettings(projectId, body, req.user!.id);
+    res.json({ ok: true, settings: await getSettings(projectId) });
   }),
 );
 
@@ -133,17 +146,17 @@ planning.post(
   '/forecast/auto-schedule',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z
       .object({ date: dateSchema, project: z.string().optional(), maxShifts: z.number().int().min(1).max(200).optional() })
       .parse(req.body);
     const projectId = body.project ?? req.user!.project_id;
     if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
 
-    const result = autoSchedule({
+    const result = await autoSchedule({
       projectId,
       date: body.date,
-      userIds: visibleUserIds(req.user!),
+      userIds: await visibleUserIds(req.user!),
       actorId: req.user!.id,
       maxShifts: body.maxShifts,
     });
@@ -156,43 +169,55 @@ planning.get('/forecast/intervals', authenticate, (_req, res) => {
 });
 
 // --------------------------------------------------------------- analytics
-planning.get('/analytics', authenticate, requireSupervisor, (req, res) => {
-  const start = dateSchema.parse(req.query.start ?? addDays(todayStr(), -14));
-  const end = dateSchema.parse(req.query.end ?? todayStr());
-  res.json(analyse({ userIds: groupOf(req), start, end, actorId: req.user!.id }));
-});
+planning.get(
+  '/analytics',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? addDays(todayStr(), -14));
+    const end = dateSchema.parse(req.query.end ?? todayStr());
+    res.json(await analyse({ userIds: await groupOf(req), start, end, actorId: req.user!.id }));
+  }),
+);
 
 // ------------------------------------------------------------------- swaps
-planning.get('/swaps', authenticate, (req, res) => {
-  const ids = req.user!.role === 'ADVISOR' ? [req.user!.id] : visibleUserIds(req.user!);
-  res.json({ swaps: listSwaps(ids) });
-});
+planning.get(
+  '/swaps',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const ids = req.user!.role === 'ADVISOR' ? [req.user!.id] : await visibleUserIds(req.user!);
+    res.json({ swaps: await listSwaps(ids) });
+  }),
+);
 
 /** Colleagues an advisor could reasonably swap with. */
-planning.get('/swaps/candidates', authenticate, (req, res) => {
-  const date = dateSchema.parse(req.query.date ?? todayStr());
-  const ids = visibleUserIds(req.user!).filter((id) => id !== req.user!.id);
-  if (ids.length === 0) {
-    res.json({ candidates: [] });
-    return;
-  }
-  const rows = db
-    .prepare(
+planning.get(
+  '/swaps/candidates',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const ids = (await visibleUserIds(req.user!)).filter((id) => id !== req.user!.id);
+    if (ids.length === 0) {
+      res.json({ candidates: [] });
+      return;
+    }
+    const rows = await db.all(
       `SELECT DISTINCT u.id, u.name, u.employee_id, s.payroll_date
        FROM users u JOIN schedules s ON s.user_id = u.id
-       WHERE u.id IN (${ids.map(() => '?').join(',')})
+       WHERE u.id IN (${placeholders(ids.length)})
          AND u.role = 'ADVISOR' AND u.status = 'ACTIVE'
          AND s.payroll_date BETWEEN ? AND ?
        ORDER BY s.payroll_date, u.name LIMIT 200`,
-    )
-    .all(...ids, date, addDays(date, 21));
-  res.json({ candidates: rows });
-});
+      [...ids, date, addDays(date, 21)],
+    );
+    res.json({ candidates: rows });
+  }),
+);
 
 planning.post(
   '/swaps',
   authenticate,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z
       .object({
         requesterDate: dateSchema,
@@ -202,7 +227,7 @@ planning.post(
       })
       .parse(req.body);
 
-    const result = requestSwap({ requesterId: req.user!.id, ...body });
+    const result = await requestSwap({ requesterId: req.user!.id, ...body });
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );
@@ -210,9 +235,9 @@ planning.post(
 planning.post(
   '/swaps/:id/respond',
   authenticate,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z.object({ accept: z.boolean() }).parse(req.body);
-    const result = respondToSwap(Number(req.params.id), req.user!.id, body.accept);
+    const result = await respondToSwap(Number(req.params.id), req.user!.id, body.accept);
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );
@@ -221,27 +246,36 @@ planning.post(
   '/swaps/:id/decide',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z.object({ approve: z.boolean() }).parse(req.body);
-    const result = decideSwap(Number(req.params.id), req.user!.id, body.approve);
+    const result = await decideSwap(Number(req.params.id), req.user!.id, body.approve);
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );
 
 // ------------------------------------------------------------- extra hours
-planning.get('/extra-hours', authenticate, (req, res) => {
-  res.json({ offers: listOffers(req.user!.project_id, req.user!.id) });
-});
+planning.get(
+  '/extra-hours',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    res.json({ offers: await listOffers(req.user!.project_id, req.user!.id) });
+  }),
+);
 
-planning.get('/extra-hours/:id/bids', authenticate, requireSupervisor, (req, res) => {
-  res.json({ bids: listBids(Number(req.params.id)) });
-});
+planning.get(
+  '/extra-hours/:id/bids',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    res.json({ bids: await listBids(Number(req.params.id)) });
+  }),
+);
 
 planning.post(
   '/extra-hours',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z
       .object({
         date: dateSchema,
@@ -254,15 +288,15 @@ planning.post(
       .parse(req.body);
     const projectId = body.project ?? req.user!.project_id;
     if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
-    res.json(createOffer({ ...body, projectId, actorId: req.user!.id }));
+    res.json(await createOffer({ ...body, projectId, actorId: req.user!.id }));
   }),
 );
 
 planning.post(
   '/extra-hours/:id/bid',
   authenticate,
-  asyncRoute((req, res) => {
-    const result = placeBid(Number(req.params.id), req.user!.id);
+  asyncRoute(async (req, res) => {
+    const result = await placeBid(Number(req.params.id), req.user!.id);
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );
@@ -271,14 +305,16 @@ planning.post(
   '/extra-hours/bids/:bidId/award',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
-    const bid = db
-      .prepare('SELECT user_id FROM extra_hours_bids WHERE id = ?')
-      .get(Number(req.params.bidId)) as { user_id: number } | undefined;
+  asyncRoute(async (req, res) => {
+    const bid = await db.get<{ user_id: number }>('SELECT user_id FROM extra_hours_bids WHERE id = ?', [
+      Number(req.params.bidId),
+    ]);
     if (!bid) throw new HttpError(404, 'No such bid.');
-    if (!canManage(req.user!, bid.user_id)) throw new HttpError(403, 'That advisor is not on your team.');
+    if (!(await canManage(req.user!, bid.user_id))) {
+      throw new HttpError(403, 'That advisor is not on your team.');
+    }
 
-    const result = awardBid(Number(req.params.bidId), req.user!.id);
+    const result = await awardBid(Number(req.params.bidId), req.user!.id);
     res.status(result.ok ? 200 : 400).json(result);
   }),
 );

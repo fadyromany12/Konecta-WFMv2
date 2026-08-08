@@ -13,7 +13,7 @@ import { buildAdherenceReport } from '../domain/adherence.js';
 import { toSegments } from '../domain/schedule.js';
 import { dateRange, formatDuration, type DateStr } from '../domain/time.js';
 import { placeholders } from './people.js';
-import { getShifts } from './scheduling.js';
+import { getShiftsFor } from './scheduling.js';
 import { viewTimecard } from './timecards.js';
 
 export interface TrendPoint {
@@ -63,12 +63,12 @@ export interface AnalyticsResult {
  * small, and a stale aggregate that disagrees with the timecard it came from
  * would cost more trust than the query costs milliseconds.
  */
-export function analyse(params: {
+export async function analyse(params: {
   userIds: number[];
   start: DateStr;
   end: DateStr;
   actorId: number | null;
-}): AnalyticsResult {
+}): Promise<AnalyticsResult> {
   const { userIds, start, end } = params;
   const dates = dateRange(start, end);
 
@@ -81,12 +81,18 @@ export function analyse(params: {
     return emptyResult(start, end);
   }
 
-  const users = db
-    .prepare(
-      `SELECT id, employee_id, name FROM users
-       WHERE id IN (${placeholders(userIds.length)}) AND role = 'ADVISOR' ORDER BY name`,
-    )
-    .all(...userIds) as { id: number; employee_id: string; name: string }[];
+  const users = await db.all<{ id: number; employee_id: string; name: string }>(
+    `SELECT id, employee_id, name FROM users
+     WHERE id IN (${placeholders(userIds.length)}) AND role = 'ADVISOR' ORDER BY name`,
+    userIds,
+  );
+
+  // Every schedule in the range, once. The loop below runs users × dates, so a
+  // read inside it would be a fortnight of round trips per advisor.
+  const shiftsByKey = await getShiftsFor(
+    users.map((u) => u.id),
+    dates,
+  );
 
   for (const user of users) {
     scorecards.set(user.id, {
@@ -118,7 +124,7 @@ export function analyse(params: {
     let dayHeadcount = 0;
 
     for (const user of users) {
-      const card = viewTimecard({ userId: user.id, date, autoGenerate: false });
+      const card = await viewTimecard({ userId: user.id, date, autoGenerate: false });
       if (!card || card.rows.length === 0) continue;
 
       dayHeadcount++;
@@ -161,7 +167,7 @@ export function analyse(params: {
         }
       }
 
-      const shifts = getShifts(user.id, date);
+      const shifts = shiftsByKey.get(`${user.id}|${date}`) ?? [];
       if (shifts.length > 0) {
         const report = buildAdherenceReport({ shifts, rows: card.rows });
         dayAdherenceSum += report.adherencePct;

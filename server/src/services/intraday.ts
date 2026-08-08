@@ -9,12 +9,17 @@
  */
 
 import { db } from '../db/index.js';
-import { ACTIVITY_MAP } from '../domain/reference.js';
+import {
+  ACTIVITY_MAP,
+  DEFAULT_SHIFT_RULE,
+  SHIFT_RULE_MAP,
+  type ShiftRule,
+} from '../domain/reference.js';
 import { toSegments } from '../domain/schedule.js';
 import { INTERVAL_MINUTES } from '../domain/forecast.js';
 import { addDays, diffMinutes, nowStamp, todayStr, type DateStr, type Stamp } from '../domain/time.js';
-import { effectiveShiftRule, placeholders } from './people.js';
-import { getShifts } from './scheduling.js';
+import { placeholders } from './people.js';
+import { getShiftsFor } from './scheduling.js';
 
 export type LiveState =
   | 'ON_PHONE'
@@ -68,28 +73,65 @@ interface PunchRow {
 }
 
 /**
+ * Shift rules for many people at once.
+ *
+ * `effectiveShiftRule` is two queries per person, which is the right shape when
+ * one card is being looked at and the wrong one when a whole team is on screen.
+ */
+async function shiftRulesFor(userIds: number[], date: DateStr): Promise<Map<number, ShiftRule>> {
+  const out = new Map<number, ShiftRule>();
+  if (userIds.length === 0) return out;
+
+  const [users, changes] = await Promise.all([
+    db.all<{ id: number; shift_rule: string }>(
+      `SELECT id, shift_rule FROM users WHERE id IN (${placeholders(userIds.length)})`,
+      userIds,
+    ),
+    db.all<{ user_id: number; shift_rule: string }>(
+      `SELECT user_id, shift_rule FROM shift_rule_changes
+       WHERE user_id IN (${placeholders(userIds.length)}) AND effective_date <= ?
+       ORDER BY effective_date, id`,
+      [...userIds, date],
+    ),
+  ]);
+
+  // Ordered ascending, so the last change on or before the date wins.
+  const latestChange = new Map<number, string>();
+  for (const change of changes) latestChange.set(change.user_id, change.shift_rule);
+
+  const fallback = SHIFT_RULE_MAP.get(DEFAULT_SHIFT_RULE)!;
+  for (const user of users) {
+    const code = latestChange.get(user.id) ?? user.shift_rule ?? DEFAULT_SHIFT_RULE;
+    out.set(user.id, SHIFT_RULE_MAP.get(code) ?? fallback);
+  }
+  return out;
+}
+
+/**
  * Latest punch per person, looking back far enough to catch an overnight shift
  * that started yesterday evening.
  */
-function latestPunches(userIds: number[], now: Stamp): Map<number, PunchRow> {
+async function latestPunches(userIds: number[], now: Stamp): Promise<Map<number, PunchRow>> {
   if (userIds.length === 0) return new Map();
   const from = `${addDays(now.slice(0, 10), -1)} 00:00`;
-  const rows = db
-    .prepare(
-      `SELECT p.user_id, p.at, p.type, p.activity
-       FROM punches p
-       WHERE p.user_id IN (${placeholders(userIds.length)})
-         AND p.at BETWEEN ? AND ?
-       ORDER BY p.at`,
-    )
-    .all(...userIds, from, now) as PunchRow[];
+  const rows = await db.all<PunchRow>(
+    `SELECT p.user_id, p.at, p.type, p.activity
+     FROM punches p
+     WHERE p.user_id IN (${placeholders(userIds.length)})
+       AND p.at BETWEEN ? AND ?
+     ORDER BY p.at`,
+    [...userIds, from, now],
+  );
 
   const latest = new Map<number, PunchRow>();
   for (const row of rows) latest.set(row.user_id, row); // ordered, so the last wins
   return latest;
 }
 
-export function intradaySnapshot(userIds: number[], now: Stamp = nowStamp()): IntradaySnapshot {
+export async function intradaySnapshot(
+  userIds: number[],
+  now: Stamp = nowStamp(),
+): Promise<IntradaySnapshot> {
   const today = now.slice(0, 10);
   const people: LivePerson[] = [];
   const alerts: IntradaySnapshot['alerts'] = [];
@@ -98,21 +140,28 @@ export function intradaySnapshot(userIds: number[], now: Stamp = nowStamp()): In
     return { at: now, people, totals: emptyTotals(), alerts };
   }
 
-  const users = db
-    .prepare(
-      `SELECT id, employee_id, name, role FROM users
-       WHERE id IN (${placeholders(userIds.length)}) AND role = 'ADVISOR' ORDER BY name`,
-    )
-    .all(...userIds) as { id: number; employee_id: string; name: string }[];
+  const users = await db.all<{ id: number; employee_id: string; name: string }>(
+    `SELECT id, employee_id, name, role FROM users
+     WHERE id IN (${placeholders(userIds.length)}) AND role = 'ADVISOR' ORDER BY name`,
+    userIds,
+  );
 
-  const latest = latestPunches(users.map((u) => u.id), now);
+  const ids = users.map((u) => u.id);
+  const yesterday = addDays(today, -1);
+  // Everything this loop needs, read up front. Reaching into the database from
+  // inside the per-person loop would make drawing one board a query per person.
+  const [latest, shiftsByKey, rules] = await Promise.all([
+    latestPunches(ids, now),
+    getShiftsFor(ids, [yesterday, today]),
+    shiftRulesFor(ids, today),
+  ]);
 
   for (const user of users) {
     // A shift that began yesterday evening is still today's business at 02:00.
     const segments = [
-      ...getShifts(user.id, addDays(today, -1)).flatMap((s) => toSegments(s)),
-      ...getShifts(user.id, today).flatMap((s) => toSegments(s)),
-    ].filter((seg) => seg.endAt > `${addDays(today, -1)} 12:00`);
+      ...(shiftsByKey.get(`${user.id}|${yesterday}`) ?? []).flatMap((s) => toSegments(s)),
+      ...(shiftsByKey.get(`${user.id}|${today}`) ?? []).flatMap((s) => toSegments(s)),
+    ].filter((seg) => seg.endAt > `${yesterday} 12:00`);
 
     const current = segments.find((seg) => seg.startAt <= now && seg.endAt > now);
     const shiftStart = segments[0]?.startAt ?? null;
@@ -133,7 +182,7 @@ export function intradaySnapshot(userIds: number[], now: Stamp = nowStamp()): In
       else if (meta?.productive) state = 'ON_PHONE';
       else state = 'OTHER_WORK';
     } else if (onShift) {
-      const rule = effectiveShiftRule(user.id, today);
+      const rule = rules.get(user.id)!;
       const late = shiftStart ? diffMinutes(shiftStart, now) : 0;
       if (late > rule.lateGraceMinutes) {
         // Clocked off before the end counts differently to never having arrived.
@@ -185,7 +234,7 @@ export function intradaySnapshot(userIds: number[], now: Stamp = nowStamp()): In
       });
     }
     if (state === 'LUNCH' || state === 'BREAK') {
-      const rule = effectiveShiftRule(user.id, today);
+      const rule = rules.get(user.id)!;
       const allowance = state === 'LUNCH' ? rule.lunchMinutes : 15;
       const over = diffMinutes(punch!.at, now) - allowance;
       if (over > 5) {
@@ -231,13 +280,19 @@ function sameFamily(scheduled: string, actual: string | null): boolean {
  * Headcount scheduled to be on the phone in each half hour, which is what the
  * forecast's required figure gets compared against.
  */
-export function scheduledByInterval(userIds: number[], date: DateStr): Map<string, number> {
+export async function scheduledByInterval(userIds: number[], date: DateStr): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (userIds.length === 0) return counts;
 
+  const previous = addDays(date, -1);
+  const shiftsByKey = await getShiftsFor(userIds, [previous, date]);
+
   for (const userId of userIds) {
     // A shift starting the previous evening still covers this morning.
-    const shifts = [...getShifts(userId, addDays(date, -1)), ...getShifts(userId, date)];
+    const shifts = [
+      ...(shiftsByKey.get(`${userId}|${previous}`) ?? []),
+      ...(shiftsByKey.get(`${userId}|${date}`) ?? []),
+    ];
     for (const shift of shifts) {
       for (const seg of toSegments(shift)) {
         // Only time on a productive activity answers contacts.

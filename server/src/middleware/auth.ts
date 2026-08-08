@@ -29,7 +29,7 @@ export function signToken(userId: number): string {
   return jwt.sign({ sub: String(userId) }, SECRET, { expiresIn: TOKEN_TTL });
 }
 
-export function authenticate(req: Request, res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Sign in to continue.' });
@@ -37,7 +37,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   }
   try {
     const payload = jwt.verify(header.slice(7), SECRET) as { sub: string };
-    const user = getUser(Number(payload.sub));
+    const user = await getUser(Number(payload.sub));
     if (!user) {
       res.status(401).json({ error: 'Account no longer exists.' });
       return;
@@ -53,8 +53,15 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     }
     req.user = user;
     next();
-  } catch {
-    res.status(401).json({ error: 'Your session has expired. Sign in again.' });
+  } catch (err) {
+    // A rejected token and an unreachable database are different failures and
+    // must not both read as "sign in again", or an outage looks like a expired
+    // session and everybody re-authenticates into the same wall.
+    if (err instanceof jwt.JsonWebTokenError || err instanceof jwt.TokenExpiredError) {
+      res.status(401).json({ error: 'Your session has expired. Sign in again.' });
+      return;
+    }
+    next(err);
   }
 }
 
@@ -72,7 +79,7 @@ export function authenticateStream(req: Request, res: Response, next: NextFuncti
   if (!req.headers.authorization && typeof req.query.token === 'string') {
     req.headers.authorization = `Bearer ${req.query.token}`;
   }
-  authenticate(req, res, next);
+  void authenticate(req, res, next);
 }
 
 export function requireRole(...roles: Role[]) {

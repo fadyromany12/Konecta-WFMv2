@@ -38,32 +38,36 @@ export interface ClockState {
  * still yesterday's payroll date at 03:00, so we look back a day before
  * defaulting to today.
  */
-export function currentPayrollDate(userId: number, now: Stamp): DateStr {
+export async function currentPayrollDate(userId: number, now: Stamp): Promise<DateStr> {
   const today = now.slice(0, 10);
   for (const date of [addDays(today, -1), today]) {
-    const shifts = getShifts(userId, date);
+    const shifts = await getShifts(userId, date);
     if (shifts.length === 0) continue;
-    const window = clockOnWindow(shifts, effectiveShiftRule(userId, date).clockOnLeadMinutes);
+    const rule = await effectiveShiftRule(userId, date);
+    const window = clockOnWindow(shifts, rule.clockOnLeadMinutes);
     if (window && now >= window.earliest && now <= window.latest) return date;
   }
   return today;
 }
 
 function lastPunch(userId: number) {
-  return db
-    .prepare('SELECT at, type, activity FROM punches WHERE user_id = ? ORDER BY at DESC, id DESC LIMIT 1')
-    .get(userId) as { at: Stamp; type: string; activity: string | null } | undefined;
+  return db.get<{ at: Stamp; type: string; activity: string | null }>(
+    'SELECT at, type, activity FROM punches WHERE user_id = ? ORDER BY at DESC, id DESC LIMIT 1',
+    [userId],
+  );
 }
 
-export function getClockState(userId: number, now: Stamp = nowStamp()): ClockState {
-  const user = getUser(userId);
-  const payrollDate = currentPayrollDate(userId, now);
-  const shifts = getShifts(userId, payrollDate);
-  const rule = effectiveShiftRule(userId, payrollDate);
+export async function getClockState(userId: number, now: Stamp = nowStamp()): Promise<ClockState> {
+  const user = await getUser(userId);
+  const payrollDate = await currentPayrollDate(userId, now);
+  const [shifts, rule] = await Promise.all([
+    getShifts(userId, payrollDate),
+    effectiveShiftRule(userId, payrollDate),
+  ]);
   const window = clockOnWindow(shifts, rule.clockOnLeadMinutes);
   const segments = shifts.flatMap((s) => toSegments(s));
 
-  const last = lastPunch(userId);
+  const last = await lastPunch(userId);
   const clockedOn = !!last && last.type !== 'OFF';
   const activity = clockedOn ? last!.activity : null;
   const activityMeta = activity ? ACTIVITY_MAP.get(activity) : null;
@@ -93,9 +97,10 @@ export function getClockState(userId: number, now: Stamp = nowStamp()): ClockSta
     message = 'Ready to clock on.';
   }
 
-  const punchesToday = db
-    .prepare('SELECT at, type, activity FROM punches WHERE user_id = ? AND at >= ? ORDER BY at')
-    .all(userId, `${payrollDate} 00:00`) as { at: Stamp; type: string; activity: string | null }[];
+  const punchesToday = await db.all<{ at: Stamp; type: string; activity: string | null }>(
+    'SELECT at, type, activity FROM punches WHERE user_id = ? AND at >= ? ORDER BY at',
+    [userId, `${payrollDate} 00:00`],
+  );
 
   const todaySegments = punchesToday
     .filter((p) => p.type !== 'OFF')
@@ -109,7 +114,7 @@ export function getClockState(userId: number, now: Stamp = nowStamp()): ClockSta
       };
     });
 
-  const availableActivities = availableFor(user?.project_id ?? null);
+  const availableActivities = await availableFor(user?.project_id ?? null);
 
   return {
     clockedOn,
@@ -133,15 +138,14 @@ export function getClockState(userId: number, now: Stamp = nowStamp()): ClockSta
  * profile that has not been set up correctly, so we say so rather than showing
  * an unexplained blank dropdown.
  */
-export function availableFor(projectId: string | null) {
+export async function availableFor(projectId: string | null) {
   if (!projectId) return [];
-  const codes = (
-    db.prepare('SELECT activity_code FROM project_activities WHERE activity_id = ?').all(projectId) as {
-      activity_code: string;
-    }[]
-  ).map((r) => r.activity_code);
-  return codes
-    .map((code) => ACTIVITY_MAP.get(code))
+  const rows = await db.all<{ activity_code: string }>(
+    'SELECT activity_code FROM project_activities WHERE activity_id = ?',
+    [projectId],
+  );
+  return rows
+    .map((r) => ACTIVITY_MAP.get(r.activity_code))
     .filter((a): a is NonNullable<typeof a> => !!a)
     .map((a) => ({ code: a.code, name: a.name, family: a.family }));
 }
@@ -152,17 +156,17 @@ export interface PunchResult {
   state: ClockState;
 }
 
-export function punch(params: {
+export async function punch(params: {
   userId: number;
   type: 'ON' | 'OFF' | 'CHANGE';
   activity?: string | null;
   actorId: number;
   now?: Stamp;
-}): PunchResult {
+}): Promise<PunchResult> {
   const { userId, type, actorId } = params;
   const now = params.now ?? nowStamp();
-  const state = getClockState(userId, now);
-  const rule = effectiveShiftRule(userId, state.payrollDate ?? todayStr());
+  const state = await getClockState(userId, now);
+  const rule = await effectiveShiftRule(userId, state.payrollDate ?? todayStr());
 
   const fail = (message: string): PunchResult => ({ ok: false, message, state });
 
@@ -192,9 +196,9 @@ export function punch(params: {
     return fail('That activity code is not recognised.');
   }
 
-  const user = getUser(userId);
+  const user = await getUser(userId);
   if (params.activity && user?.project_id) {
-    const allowed = availableFor(user.project_id).some((a) => a.code === params.activity);
+    const allowed = (await availableFor(user.project_id)).some((a) => a.code === params.activity);
     if (!allowed) {
       return fail(
         'That activity is not configured for your project. If your activity list looks wrong, your project or department code needs correcting.',
@@ -202,21 +206,21 @@ export function punch(params: {
     }
   }
 
-  db.prepare('INSERT INTO punches (user_id, at, type, activity, source) VALUES (?, ?, ?, ?, ?)').run(
+  await db.run('INSERT INTO punches (user_id, at, type, activity, source) VALUES (?, ?, ?, ?, ?)', [
     userId,
     now,
     type,
     type === 'OFF' ? null : (params.activity ?? null),
     'WEB_CLOCK',
-  );
-  audit(actorId, 'punch', userId, type, { at: now, activity: params.activity ?? null });
+  ]);
+  await audit(actorId, 'punch', userId, type, { at: now, activity: params.activity ?? null });
 
   // Keep the card in step with the punch stream so a supervisor watching the
   // payroll summary sees the shift build up live.
   const payrollDate = state.payrollDate ?? todayStr();
-  generateTimecard({ userId, date: payrollDate, actorId, now });
+  await generateTimecard({ userId, date: payrollDate, actorId, now });
 
-  const after = getClockState(userId, now);
+  const after = await getClockState(userId, now);
   const verb =
     type === 'ON'
       ? `Clocked on at ${now.slice(11)}.`
@@ -247,8 +251,8 @@ export function punch(params: {
   // Lateness is the one punch worth interrupting a supervisor for: it is still
   // fixable while the shift is running and useless information the next day.
   if (lateMinutes > 0) {
-    notify(
-      supervisorsOf(userId),
+    await notify(
+      await supervisorsOf(userId),
       'Late start',
       `${user?.name ?? `#${userId}`} clocked on ${lateMinutes} minutes late at ${now.slice(11)}.`,
       'WARN',

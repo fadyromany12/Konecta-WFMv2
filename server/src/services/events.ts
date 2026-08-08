@@ -102,11 +102,17 @@ export function emit(
  * Attach a response as an SSE stream. Returns a teardown the route registers
  * against the request closing.
  */
-export function subscribe(user: UserRow, res: Response, lastEventId: number): () => void {
+export async function subscribe(
+  user: UserRow,
+  res: Response,
+  lastEventId: number,
+): Promise<() => void> {
   // Resolved once at connect: who this user is entitled to hear about. An
-  // advisor hears only about themselves, whatever else is happening.
+  // advisor hears only about themselves, whatever else is happening. Doing it
+  // here rather than per event means a hierarchy read does not sit in the path
+  // of every punch.
   const audience = new Set<number>(
-    user.role === 'ADVISOR' ? [user.id] : [...visibleUserIds(user), user.id],
+    user.role === 'ADVISOR' ? [user.id] : [...(await visibleUserIds(user)), user.id],
   );
 
   res.writeHead(200, {
@@ -167,66 +173,70 @@ export interface Notification {
  * Durable notifications, as distinct from the live stream: a supervisor who was
  * not at their desk when the event fired still needs to find out.
  */
-export function notify(userIds: number[], subject: string, body: string, severity = 'INFO'): void {
+export async function notify(
+  userIds: number[],
+  subject: string,
+  body: string,
+  severity = 'INFO',
+): Promise<void> {
   if (userIds.length === 0) return;
   try {
-    const insert = db.prepare(
-      'INSERT INTO messages (user_id, subject, body, severity) VALUES (?, ?, ?, ?)',
-    );
-    const write = db.transaction((ids: number[]) => {
-      for (const id of ids) insert.run(id, subject, body, severity);
-    });
-    write(userIds);
+    // One statement rather than one per recipient: an offer going out to a
+    // whole project is a single round trip instead of twenty.
+    const values = userIds.map(() => '(?, ?, ?, ?)').join(', ');
+    const params = userIds.flatMap((id) => [id, subject, body, severity]);
+    await db.run(`INSERT INTO messages (user_id, subject, body, severity) VALUES ${values}`, params);
   } catch (err) {
+    // A notification that cannot be stored must never fail the punch or
+    // approval that produced it.
     console.error('Could not store notification:', err);
   }
 }
 
 /** Everyone who supervises this person, for "who needs to know" decisions. */
-export function supervisorsOf(userId: number): number[] {
-  const rows = db
-    .prepare(
-      `SELECT m.id FROM users u JOIN users m ON m.id = u.manager_id
-       WHERE u.id = ? AND m.status = 'ACTIVE'`,
-    )
-    .all(userId) as { id: number }[];
+export async function supervisorsOf(userId: number): Promise<number[]> {
+  const rows = await db.all<{ id: number }>(
+    `SELECT m.id FROM users u JOIN users m ON m.id = u.manager_id
+     WHERE u.id = ? AND m.status = 'ACTIVE'`,
+    [userId],
+  );
   const direct = rows.map((r) => r.id);
   if (direct.length === 0) return [];
 
   // Anyone acting as an alternate for those managers needs the same visibility.
-  const alternates = db
-    .prepare(
-      `SELECT alternate_user_id AS id FROM alternates WHERE user_id IN (${placeholders(direct.length)})`,
-    )
-    .all(...direct) as { id: number }[];
+  const alternates = await db.all<{ id: number }>(
+    `SELECT alternate_user_id AS id FROM alternates WHERE user_id IN (${placeholders(direct.length)})`,
+    direct,
+  );
 
   return [...new Set([...direct, ...alternates.map((a) => a.id)])];
 }
 
-export function listNotifications(userId: number, limit = 50): Notification[] {
-  const rows = db
-    .prepare(
-      'SELECT id, subject, body, severity, read_flag, created_at FROM messages WHERE user_id = ? ORDER BY id DESC LIMIT ?',
-    )
-    .all(userId, limit) as {
+export async function listNotifications(userId: number, limit = 50): Promise<Notification[]> {
+  const rows = await db.all<{
     id: number;
     subject: string;
     body: string;
     severity: string;
     read_flag: number;
     created_at: string;
-  }[];
+  }>(
+    'SELECT id, subject, body, severity, read_flag, created_at FROM messages WHERE user_id = ? ORDER BY id DESC LIMIT ?',
+    [userId, limit],
+  );
   return rows.map((r) => ({
     id: r.id,
     subject: r.subject,
     body: r.body,
     severity: r.severity,
-    read: r.read_flag === 1,
+    read: Number(r.read_flag) === 1,
     createdAt: r.created_at,
   }));
 }
 
-export function markAllRead(userId: number): number {
-  return db.prepare('UPDATE messages SET read_flag = 1 WHERE user_id = ? AND read_flag = 0').run(userId)
-    .changes;
+export async function markAllRead(userId: number): Promise<number> {
+  const result = await db.run('UPDATE messages SET read_flag = 1 WHERE user_id = ? AND read_flag = 0', [
+    userId,
+  ]);
+  return result.changes;
 }

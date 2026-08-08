@@ -22,33 +22,53 @@ export const events = Router();
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD date');
 
 // ------------------------------------------------------------------ stream
-events.get('/events', authenticateStream, (req, res) => {
-  const lastEventId = Number(req.headers['last-event-id'] ?? req.query.lastEventId ?? 0) || 0;
-  const teardown = subscribe(req.user!, res, lastEventId);
-  req.on('close', teardown);
-});
+events.get(
+  '/events',
+  authenticateStream,
+  asyncRoute(async (req, res) => {
+    const lastEventId = Number(req.headers['last-event-id'] ?? req.query.lastEventId ?? 0) || 0;
+    const teardown = await subscribe(req.user!, res, lastEventId);
+    // If the client hung up while the audience was being resolved, tear down
+    // immediately rather than leaving a subscriber pointed at a dead socket.
+    if (req.closed) teardown();
+    else req.on('close', teardown);
+  }),
+);
 
 events.get('/events/status', authenticate, (_req, res) => {
   res.json({ connections: subscriberCount() });
 });
 
 // ----------------------------------------------------------- notifications
-events.get('/notifications', authenticate, (req, res) => {
-  const items = listNotifications(req.user!.id);
-  res.json({ notifications: items, unread: items.filter((n) => !n.read).length });
-});
+events.get(
+  '/notifications',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const items = await listNotifications(req.user!.id);
+    res.json({ notifications: items, unread: items.filter((n) => !n.read).length });
+  }),
+);
 
-events.post('/notifications/read-all', authenticate, (req, res) => {
-  res.json({ ok: true, marked: markAllRead(req.user!.id) });
-});
+events.post(
+  '/notifications/read-all',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    res.json({ ok: true, marked: await markAllRead(req.user!.id) });
+  }),
+);
 
-events.post('/notifications/:id/read', authenticate, (req, res) => {
-  const info = db
-    .prepare('UPDATE messages SET read_flag = 1 WHERE id = ? AND user_id = ?')
-    .run(Number(req.params.id), req.user!.id);
-  if (info.changes === 0) throw new HttpError(404, 'No such notification.');
-  res.json({ ok: true });
-});
+events.post(
+  '/notifications/:id/read',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const info = await db.run('UPDATE messages SET read_flag = 1 WHERE id = ? AND user_id = ?', [
+      Number(req.params.id),
+      req.user!.id,
+    ]);
+    if (info.changes === 0) throw new HttpError(404, 'No such notification.');
+    res.json({ ok: true });
+  }),
+);
 
 // ------------------------------------------------------------ bulk approval
 /**
@@ -65,7 +85,7 @@ events.post(
   '/payroll/approve-clean',
   authenticate,
   requireSupervisor,
-  asyncRoute((req, res) => {
+  asyncRoute(async (req, res) => {
     const body = z
       .object({
         group: z.string().optional(),
@@ -76,8 +96,8 @@ events.post(
       })
       .parse(req.body);
 
-    const ids = resolveGroup(req.user!, body.group);
-    const rows = payrollSummary({
+    const ids = await resolveGroup(req.user!, body.group);
+    const rows = await payrollSummary({
       userIds: ids,
       start: body.start,
       end: body.end,
@@ -99,12 +119,12 @@ events.post(
         skipped.push({ key, name: row.name, date: row.payrollDate, reason });
         continue;
       }
-      if (!canManage(req.user!, row.userId)) {
+      if (!(await canManage(req.user!, row.userId))) {
         skipped.push({ key, name: row.name, date: row.payrollDate, reason: 'not on your team' });
         continue;
       }
 
-      const result = setApproval({
+      const result = await setApproval({
         userId: row.userId,
         date: row.payrollDate,
         approved: true,
