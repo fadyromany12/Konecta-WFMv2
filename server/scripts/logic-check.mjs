@@ -22,6 +22,10 @@
  * working tomorrow.
  */
 const BASE = process.env.BASE ?? 'http://localhost:4000/api';
+// The origin behind BASE. Hard-coding localhost:4000 here meant the page-load
+// checks silently tested whichever server happened to be on that port rather
+// than the one everything else was aimed at.
+const ORIGIN = new URL(BASE).origin;
 
 /** Dates relative to today, so this keeps working tomorrow. */
 const day = (offset) => {
@@ -91,6 +95,22 @@ const foreign = otherTeam.find((p) => !people.some((q) => q.id === p.id));
 if (foreign) {
   check("cannot view another team's timecard", (await call('GET',`/timecards/${foreign.id}/${day(-3)}`,TL)).status === 403);
 } else check('teams overlap so cross-team check skipped', true);
+
+// Peer privacy. `visibleUserIds` includes everybody under the same
+// second-level manager so supervisors can cover for each other, and applying
+// that to a record let one advisor read another's.
+check('an advisor cannot read a peer timecard',
+  (await call('GET',`/timecards/3/${RECENT}`,ADV)).status === 403);
+check('an advisor cannot read a peer leave balance',
+  (await call('GET','/absence/accruals?userId=3',ADV)).status === 403);
+check('an advisor cannot read a peer schedule',
+  (await call('GET',`/schedules/3?start=${RECENT}&end=${RECENT}`,ADV)).status === 403);
+check('an advisor cannot read a peer personal history',
+  (await call('GET','/history/3',ADV)).status === 403);
+check('an advisor can still read their own',
+  (await call('GET','/absence/accruals?userId=6',ADV)).status === 200);
+check('a team leader still reads their team',
+  (await call('GET',`/timecards/3/${RECENT}`,TL)).status === 200);
 
 console.log('=== TIMECARD RULES ===');
 const target = people.find((p) => p.role === 'ADVISOR');
@@ -513,9 +533,150 @@ check('unread count matches', notif.unread === notif.notifications.filter((n)=>!
 check('mark all read', (await call('POST','/notifications/read-all',TL)).body?.ok === true);
 check('unread is zero after', (await call('GET','/notifications',TL)).body?.unread === 0);
 
+console.log('=== PAY, HOLIDAYS AND COST ===');
+const rates = (await call('GET','/pay/rates',ADV)).body;
+check('rates are readable by everybody', rates?.rates?.overtimeDay === 1.35);
+check('night overtime is the higher rate', rates.rates.overtimeNight > rates.rates.overtimeDay);
+check('the basis of every rate is stated', (rates?.basis ?? '').includes('Law No. 14'));
+
+// Two years, because this script is run repeatedly against the same database
+// and confirming a holiday is a permanent change. SHAPE is only ever read, so
+// its assertions hold on the hundredth run as well as the first.
+const YEAR = new Date().getUTCFullYear();
+const SHAPE = YEAR + 5, MOVE = YEAR + 3;
+const shapeCal = (await call('GET',`/pay/holidays?start=${SHAPE}-01-01&end=${SHAPE}-12-31`,ADV)).body?.holidays ?? [];
+check('a year is given a holiday calendar on demand', shapeCal.length > 10, `${shapeCal.length} holidays`);
+check('Labour Day is on it', shapeCal.some((h) => h.date === `${SHAPE}-05-01`));
+check('the fixed dates arrive confirmed',
+  shapeCal.filter((h) => h.basis !== 'ISLAMIC').every((h) => h.confirmed));
+check('the Islamic dates arrive unconfirmed, because Egypt settles them by sighting',
+  shapeCal.filter((h) => h.basis === 'ISLAMIC').length > 0 &&
+  shapeCal.filter((h) => h.basis === 'ISLAMIC').every((h) => !h.confirmed));
+check('no date appears twice', new Set(shapeCal.map((h) => h.date)).size === shapeCal.length);
+check('generating a calendar twice does not duplicate it',
+  JSON.stringify((await call('GET',`/pay/holidays?start=${SHAPE}-01-01&end=${SHAPE}-12-31`,ADV)).body?.holidays)
+    === JSON.stringify(shapeCal));
+check('every holiday is inside the year asked for',
+  shapeCal.every((h) => h.date.startsWith(String(SHAPE))));
+
+// Settling changes what a region is paid for a day, so it is above supervisor.
+const moveCal = (await call('GET',`/pay/holidays?start=${MOVE}-01-01&end=${MOVE}-12-31`,ADV)).body?.holidays ?? [];
+const unconfirmed = moveCal.filter((h) => !h.confirmed);
+check('there is an estimated date to settle', unconfirmed.length > 1);
+check('a team leader cannot settle a holiday',
+  (await call('POST',`/pay/holidays/${unconfirmed[0].date}/settle`,TL,{})).status === 403);
+check('a date that is not a holiday cannot be settled',
+  (await call('POST','/pay/holidays/1999-01-01/settle',OM,{})).status === 400);
+check('an ops manager confirms an estimated date',
+  (await call('POST',`/pay/holidays/${unconfirmed[0].date}/settle`,OM,{})).body?.ok === true);
+check('confirming sticks',
+  (await call('GET',`/pay/holidays?start=${unconfirmed[0].date}&end=${unconfirmed[0].date}`,ADV))
+    .body?.holidays?.[0]?.confirmed === true);
+check('a holiday cannot be moved onto another holiday',
+  (await call('POST',`/pay/holidays/${unconfirmed[0].date}/settle`,OM,{actualDate:`${MOVE}-05-01`})).status === 400);
+
+console.log('=== WHAT A DAY COSTS ===');
+const costed = (await call('GET',`/payroll/summary?start=${RANGE_START}&end=${RANGE_END}`,TL)).body?.rows ?? [];
+check('every payroll row carries a cost', costed.every((r) => typeof r.paidMinutes === 'number'));
+check('every payroll row says what kind of day it was',
+  costed.every((r) => ['ORDINARY','REST_DAY','PUBLIC_HOLIDAY'].includes(r.dayCharacter)));
+check('an ordinary day with no overtime costs exactly what it worked',
+  costed.filter((r) => r.dayCharacter === 'ORDINARY' && r.overtime === '00:00')
+    .every((r) => r.premiumMinutes === 0));
+const restDays = costed.filter((r) => r.dayCharacter === 'REST_DAY' && r.paidMinutes > 0);
+check('a cancelled rest day costs double',
+  restDays.length > 0 && restDays.every((r) => r.paidMinutes === r.premiumMinutes * 2),
+  `${restDays.length} cancelled rest days`);
+
+const cost = (await call('GET',`/pay/cost/6?start=${RANGE_START}&end=${RANGE_END}`,TL)).body;
+check('a cost breakdown covers every day in the range',
+  cost?.days?.length === Math.round((Date.parse(RANGE_END) - Date.parse(RANGE_START)) / 86400000) + 1);
+check('the total matches the days',
+  cost.total.paidMinutes === Math.round(cost.days.reduce((s,d) => s + d.paidMinutes, 0) * 100) / 100);
+check('paid is never less than worked', cost.days.every((d) => d.paidMinutes >= d.workedMinutes));
+// Layla is user 6; user 3 is a peer on the same team.
+check('an advisor can see their own cost',
+  (await call('GET',`/pay/cost/6?start=${RECENT}&end=${RECENT}`,ADV)).status === 200);
+check("an advisor cannot see a peer's cost",
+  (await call('GET',`/pay/cost/3?start=${RECENT}&end=${RECENT}`,ADV)).status === 403);
+
+const roster = (await call('GET',`/pay/roster?start=${RANGE_START}&end=${RANGE_END}&drafts=true`,TL)).body;
+check('a roster can be costed before it is worked', roster?.total?.paidMinutes > 0);
+check('roster cost is supervisor only',
+  (await call('GET',`/pay/roster?start=${RANGE_START}&end=${RANGE_END}`,ADV)).status === 403);
+
+console.log('=== SETTLING A WORKED HOLIDAY ===');
+// Build the case rather than hunt for it. Moving an estimated holiday onto a
+// day somebody actually worked is the real workflow — an Eid announced a day
+// off the arithmetic calendar's guess — and it is the only way to get a worked
+// public holiday into a seeded week. Guarded so a second run does not try to
+// move a second holiday onto a date that is already one.
+const alreadyHoliday = (await call('GET',`/pay/holidays?start=${RECENT}&end=${RECENT}`,ADV)).body?.holidays ?? [];
+if (alreadyHoliday.length === 0) {
+  const spare = (await call('GET',`/pay/holidays?start=${MOVE}-01-01&end=${MOVE}-12-31`,ADV))
+    .body?.holidays?.find((h) => !h.confirmed);
+  check('an announced date can be moved onto the day it fell on',
+    (await call('POST',`/pay/holidays/${spare.date}/settle`,OM,{actualDate:RECENT})).body?.ok === true);
+  check('the estimate it replaced is gone, not left beside it',
+    !((await call('GET',`/pay/holidays?start=${spare.date}&end=${spare.date}`,ADV)).body?.holidays ?? [])
+      .some((h) => h.date === spare.date));
+}
+check('the worked day is now a public holiday',
+  ((await call('GET',`/pay/holidays?start=${RECENT}&end=${RECENT}`,ADV)).body?.holidays ?? []).length === 1);
+
+const summaryOn = async (date) =>
+  (await call('GET',`/payroll/summary?start=${date}&end=${date}`,TL)).body?.rows ?? [];
+const holidayRow = (await summaryOn(RECENT)).find((r) => r.paidMinutes > 0);
+check('a worked holiday reads as one on the payroll summary',
+  holidayRow?.dayCharacter === 'PUBLIC_HOLIDAY', JSON.stringify(holidayRow?.dayCharacter));
+
+const holidayCard = (await call('GET',`/timecards/${holidayRow.userId}/${RECENT}`,OM)).body?.timecard;
+check('a card exists on the holiday to settle', !!holidayCard, `user ${holidayRow?.userId} on ${RECENT}`);
+
+// Only true on a virgin database — a second run of this script has already
+// settled the card. Asserted where it holds rather than skipped, because the
+// unsettled state is the one a real supervisor meets first.
+if (holidayCard.holidayElection === null) {
+  check('an unsettled holiday says so', holidayRow.electionOutstanding === true);
+  check('and is costed at triple until somebody decides',
+    holidayRow.paidMinutes === holidayRow.premiumMinutes * 1.5,
+    `paid ${holidayRow.paidMinutes} premium ${holidayRow.premiumMinutes}`);
+}
+check('an advisor cannot settle a holiday',
+  (await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,ADV,{election:'PAY_3X'})).status === 403);
+check('an unknown settlement is refused',
+  (await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,OM,{election:'FREE'})).status === 400);
+
+const bank = async () => (await call('GET',`/absence/accruals?userId=${holidayRow.userId}`,OM)).body?.accruals
+  ?.find((b) => b.accrual_type === 'VACATION')?.balance_hours ?? 0;
+
+// Start from cash so the sequence below is the same on every run.
+await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,OM,{election:'PAY_3X'});
+const cashRow = (await summaryOn(RECENT)).find((r) => r.userId === holidayRow.userId);
+check('settled for cash, nothing is outstanding', cashRow.electionOutstanding === false);
+check('and it costs triple', cashRow.paidMinutes === cashRow.premiumMinutes * 1.5,
+  `paid ${cashRow.paidMinutes} premium ${cashRow.premiumMinutes}`);
+const cashCost = cashRow.paidMinutes;
+const bankBefore = await bank();
+check('a supervisor settles it at double plus a banked day',
+  (await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,OM,{election:'PAY_2X_PLUS_DAY'})).body?.ok === true);
+const bankAfter = await bank();
+check('the banked day reaches the balance', bankAfter === bankBefore + 8, `${bankBefore} -> ${bankAfter}`);
+check('and the day now costs double rather than triple',
+  (await summaryOn(RECENT)).find((r) => r.userId === holidayRow.userId)?.paidMinutes === cashCost / 1.5,
+  `expected ${cashCost / 1.5}`);
+
+// The click-twice case.
+await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,OM,{election:'PAY_2X_PLUS_DAY'});
+check('settling the same way twice banks one day, not two', (await bank()) === bankAfter);
+
+// And changing your mind must take it back.
+await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,OM,{election:'PAY_3X'});
+check('changing to cash takes the banked day back', (await bank()) === bankBefore, `expected ${bankBefore}`);
+
 console.log('=== SPA ROUTING ===');
 for (const p of ['/dashboard','/admin/audit','/reports/query','/my']) {
-  const res = await fetch('http://localhost:4000' + p, { headers: { accept: 'text/html' } });
+  const res = await fetch(ORIGIN + p, { headers: { accept: 'text/html' } });
   check(`page load ${p} serves the app`, res.headers.get('content-type')?.includes('text/html'), `got ${res.headers.get('content-type')}`);
 }
 

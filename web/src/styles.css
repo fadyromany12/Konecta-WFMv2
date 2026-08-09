@@ -4404,3 +4404,94 @@ main {
     transition: none;
   }
 }
+
+/* ---------------------------------------------------------------- pay panel
+   The cost of a day, beside the card. Laid out as a small ledger: label,
+   hours, multiplier, cost — so the multiplication is visible rather than
+   asserted, and a supervisor can check the total by eye before settling it. */
+
+.pay-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.7rem;
+}
+
+.pay-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.pay-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pay-line dt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  /* Without this a long label refuses to wrap and pushes the cost — the one
+     number the panel exists to show — off the edge of the column. */
+  min-width: 0;
+}
+
+.pay-line dd {
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* The arithmetic, shown rather than asserted, so the total can be checked. */
+.pay-working {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.pay-line-quiet dt,
+.pay-line-quiet dd {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.pay-total {
+  border-top: 1px solid var(--hairline);
+  padding-top: 0.55rem;
+}
+
+.pay-settle {
+  margin-top: 0.9rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--hairline-soft);
+}
+
+/* Two equal choices, because they are two equal choices. A primary button
+   beside a ghost one would read as a recommendation, and Pulse has no view on
+   whether somebody would rather have the money or the day. */
+.pay-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.pay-choices > * {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (max-width: 30rem) {
+  .pay-choices {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pay-note {
+  margin-top: 0.7rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}

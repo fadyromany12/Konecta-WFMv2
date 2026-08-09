@@ -103,6 +103,9 @@ async function migrate(): Promise<void> {
   // Existing rows were being worked to, so they are published by definition.
   await addColumn('schedules', 'status', "TEXT NOT NULL DEFAULT 'PUBLISHED'");
   await addColumn('schedules', 'published_at', 'TEXT');
+  // How a worked public holiday was settled. Null means nobody has chosen yet,
+  // which is a state the payroll screen has to be able to show.
+  await addColumn('timecards', 'holiday_election', 'TEXT');
 }
 
 async function addColumn(table: string, column: string, type: string): Promise<void> {

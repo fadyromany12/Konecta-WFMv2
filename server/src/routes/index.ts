@@ -43,6 +43,20 @@ import {
   saveShifts,
   teamWeek,
 } from '../services/scheduling.js';
+import { costTimecard, dayCharacter, type HolidayElection } from '../domain/pay.js';
+import {
+  holidayDates,
+  listHolidays,
+  settleHoliday,
+  upcomingHolidays,
+} from '../services/holidays.js';
+import {
+  EGYPT_RATES,
+  actualCost,
+  electHolidaySettlement,
+  plannedCost,
+  summariseCost,
+} from '../services/pay.js';
 import {
   generateTimecard,
   payrollSummary,
@@ -464,7 +478,25 @@ api.get(
       today: todayStr(),
       protectDate: view?.protectDate ?? null,
     });
-    res.json({ timecard: view, decision, shifts: await getShifts(userId, date) });
+    const shifts = await getShifts(userId, date, { includeDrafts: true });
+    const holidays = await holidayDates(date, date);
+    const character = dayCharacter({ date, holidays, scheduled: shifts.length > 0 });
+    res.json({
+      timecard: view,
+      decision,
+      shifts,
+      // The cost travels with the card because the settlement decision is taken
+      // here, reading this card, and a supervisor choosing between triple time
+      // and a banked day needs to see what each one comes to.
+      pay: view
+        ? costTimecard({
+            rows: view.rows,
+            dayCharacter: character,
+            election: view.holidayElection as HolidayElection | null,
+          })
+        : null,
+      holiday: (await listHolidays(date, date))[0] ?? null,
+    });
   }),
 );
 
@@ -566,6 +598,125 @@ api.get(
       rows: await payrollSummary({ userIds: ids, start, end, actorId: req.user!.id }),
       editWindowDays: EDIT_WINDOW_DAYS[req.user!.role],
     });
+  }),
+);
+
+// -------------------------------------------------------------------- pay
+//
+// Cost is expressed in hours at the base rate throughout. No salary is held in
+// this system, and a paid-hours figure multiplies into money whenever somebody
+// who has the rates needs it to.
+
+api.get(
+  '/pay/rates',
+  authenticate,
+  asyncRoute(async (_req, res) => {
+    res.json({
+      rates: EGYPT_RATES,
+      basis:
+        'Overtime rates and the night window are Egyptian Labour Law No. 14 of 2025. ' +
+        'Rest day, public holiday and the day in lieu are Konecta policy. ' +
+        'Premiums do not stack: the character of the day sets the rate for every hour worked in it.',
+    });
+  }),
+);
+
+api.get(
+  '/pay/holidays',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 365));
+    res.json({ holidays: await listHolidays(start, end) });
+  }),
+);
+
+api.get(
+  '/pay/holidays/upcoming',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const days = Math.min(400, Math.max(1, Number(req.query.days ?? 90)));
+    res.json({ holidays: await upcomingHolidays(days) });
+  }),
+);
+
+/**
+ * Confirm an estimated holiday, or move it to the date that was announced.
+ *
+ * Restricted above supervisor: moving a public holiday changes what a whole
+ * region is paid for a day, which is not a team-level decision.
+ */
+api.post(
+  '/pay/holidays/:date/settle',
+  authenticate,
+  requireRole('OPS_MANAGER', 'ADMIN'),
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.params.date);
+    const body = z
+      .object({ actualDate: dateSchema.optional(), name: z.string().min(1).max(120).optional() })
+      .parse(req.body ?? {});
+    const result = await settleHoliday({ date, ...body, actorId: req.user!.id });
+    res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
+/** What a stretch of somebody's worked time cost. */
+api.get(
+  '/pay/cost/:userId',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const userId = Number(req.params.userId);
+    if (userId !== req.user!.id && !(await canManage(req.user!, userId))) {
+      throw new HttpError(403, 'You cannot see that.');
+    }
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? start);
+    const days = await actualCost({ userId, start, end, actorId: req.user!.id });
+    res.json({ days, total: summariseCost(days) });
+  }),
+);
+
+/** What a roster commits to, while there is still time to change it. */
+api.get(
+  '/pay/roster',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 6));
+    const group = typeof req.query.group === 'string' ? req.query.group : undefined;
+    const ids = await resolveGroup(req.user!, group);
+    const days = await plannedCost({
+      userIds: ids,
+      start,
+      end,
+      includeDrafts: req.query.drafts === 'true',
+    });
+    res.json({ days, total: summariseCost(days) });
+  }),
+);
+
+/**
+ * Settle a worked public holiday. The supervisor's decision, taken at approval.
+ */
+api.post(
+  '/pay/timecards/:id/holiday-election',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    const body = z.object({ election: z.enum(['PAY_3X', 'PAY_2X_PLUS_DAY']) }).parse(req.body);
+    const owner = await db.get<{ user_id: number }>('SELECT user_id FROM timecards WHERE id = ?', [id]);
+    if (!owner) throw new HttpError(404, 'No such timecard.');
+    if (!(await canManage(req.user!, owner.user_id))) {
+      throw new HttpError(403, 'You cannot settle that timecard.');
+    }
+    const result = await electHolidaySettlement({
+      timecardId: id,
+      election: body.election,
+      actorId: req.user!.id,
+    });
+    res.status(result.ok ? 200 : 400).json(result);
   }),
 );
 

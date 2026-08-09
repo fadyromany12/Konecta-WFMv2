@@ -4,7 +4,9 @@ import { SubTabs } from '../App';
 import {
   api,
   type EditDecision,
+  type PayBreakdown,
   type PayrollSummaryRow,
+  type PublicHoliday,
   type ScheduleShift,
   type Timecard,
   type TimecardRow,
@@ -12,6 +14,7 @@ import {
 import { useAsync, useSession } from '../state';
 import { useLiveEvent } from '../live';
 import { Segmented } from '../components/Segmented';
+import { PayPanel } from '../components/PayPanel';
 import { pulseSuccess } from '../lib/interaction';
 import { useToast } from '../components/Toast';
 import {
@@ -197,6 +200,16 @@ function PayrollSummary() {
   });
   const pending = allRows.filter((r) => !r.approved && !r.inProgress).length;
   const withExceptions = allRows.filter((r) => r.exceptions.length > 0).length;
+  // What the period costs, in hours at the base rate. Read off the rows already
+  // on screen so it always agrees with what is under it — including the filter.
+  const cost = allRows.reduce(
+    (sum, r) => ({
+      paid: sum.paid + r.paidMinutes,
+      premium: sum.premium + r.premiumMinutes,
+      unsettled: sum.unsettled + (r.electionOutstanding ? 1 : 0),
+    }),
+    { paid: 0, premium: 0, unsettled: 0 },
+  );
 
   const needle = search.trim().toLowerCase();
   const rows = allRows
@@ -255,6 +268,21 @@ function PayrollSummary() {
           <Stat label="Timecards" value={rows.length} />
           <Stat label="Unapproved" value={pending} tone={pending > 0 ? 'warn' : 'good'} />
           <Stat label="With exceptions" value={withExceptions} tone={withExceptions > 0 ? 'warn' : undefined} />
+          <Stat label="Cost" value={durationOf(cost.paid)} title="Hours at the base rate, premiums included" />
+          <Stat
+            label="Premium"
+            value={durationOf(cost.premium)}
+            tone={cost.premium > 0 ? 'accent' : undefined}
+            title="The part of the cost the overtime, rest day and holiday rates added"
+          />
+          {cost.unsettled > 0 && (
+            <Stat
+              label="To settle"
+              value={cost.unsettled}
+              tone="warn"
+              title="Public holidays worked and not yet settled. Costed at the higher rate meanwhile."
+            />
+          )}
         </div>
       </Toolbar>
 
@@ -331,6 +359,9 @@ function PayrollSummary() {
                   <th className="right">Overtime</th>
                   <th className="right">Absence</th>
                   <th className="right">Extra hours</th>
+                  <th className="right" title="Hours at the base rate. Premiums included.">
+                    Cost
+                  </th>
                   <th>Flags</th>
                   <th>Approved</th>
                   <th />
@@ -356,7 +387,28 @@ function PayrollSummary() {
                     <td className="right num">{row.overtime}</td>
                     <td className="right num">{row.absence}</td>
                     <td className="right num">{row.extraHours}</td>
+                    <td className="right num">
+                      {row.paid}
+                      {row.premiumMinutes > 0 && (
+                        <div className="muted" title="The part the premiums added">
+                          +{row.premium}
+                        </div>
+                      )}
+                    </td>
                     <td className="nowrap">
+                      {row.dayCharacter === 'REST_DAY' && row.paidMinutes > 0 && (
+                        <Chip label="rest day" tone="warn" title="Day off cancelled — every hour pays double" />
+                      )}
+                      {row.dayCharacter === 'PUBLIC_HOLIDAY' && (
+                        <Chip label="holiday" tone="accent" />
+                      )}
+                      {row.electionOutstanding && (
+                        <Chip
+                          label="settle"
+                          tone="warn"
+                          title="Worked on a public holiday and not yet settled. Open the card to choose."
+                        />
+                      )}
                       {row.inProgress && <Chip label="in progress" tone="accent" />}
                       {row.assumedOff && <Chip label="assumed off" tone="warn" title="No clock off punch" />}
                       {row.hasErrors && <Chip label="errors" tone="error" />}
@@ -422,13 +474,17 @@ function TimecardEditor() {
    * are checking *against* — the plan — below the fold while you edited. You
    * cannot compare intent with actual by scrolling between them.
    */
-  const [aside, setAside] = useState<'plan' | 'detail'>('plan');
+  const [aside, setAside] = useState<'plan' | 'detail' | 'pay'>('plan');
 
   const loaded = useAsync(
     () =>
-      api.get<{ timecard: Timecard | null; decision: EditDecision; shifts: ScheduleShift[] }>(
-        `/timecards/${userId}/${date}`,
-      ),
+      api.get<{
+        timecard: Timecard | null;
+        decision: EditDecision;
+        shifts: ScheduleShift[];
+        pay: PayBreakdown | null;
+        holiday: PublicHoliday | null;
+      }>(`/timecards/${userId}/${date}`),
     [userId, date],
   );
 
@@ -854,8 +910,19 @@ function TimecardEditor() {
             options={[
               { value: 'plan', label: 'Plan' },
               { value: 'detail', label: 'Details' },
+              { value: 'pay', label: 'Pay' },
             ]}
           />
+
+        {aside === 'pay' && (
+          <PayPanel
+            pay={loaded.data?.pay ?? null}
+            holiday={loaded.data?.holiday ?? null}
+            card={card}
+            canSettle={!!user?.isSupervisor}
+            onSettled={loaded.reload}
+          />
+        )}
 
         {aside === 'detail' && (
         <Card tone="quiet">
@@ -1040,6 +1107,7 @@ function WorkedCalendar() {
 
 function durationOf(minutes: number): string {
   const sign = minutes < 0 ? '-' : '';
-  const abs = Math.abs(minutes);
+  // Premium multipliers make fractional minutes; a duration should not show them.
+  const abs = Math.abs(Math.round(minutes));
   return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
 }

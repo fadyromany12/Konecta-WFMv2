@@ -107,6 +107,11 @@ export const ACTIVITIES: ActivityCode[] = [
   { code: '99-001', name: 'Lunch', paid: false, productive: false, family: 'Meal', defaultCode: 'LUN' },
   { code: '99-002', name: 'Unpaid Time Off', paid: false, productive: false, family: 'Absence', defaultCode: 'UTO' },
   { code: '99-003', name: 'Absence', paid: false, productive: false, family: 'Absence', defaultCode: 'ABS' },
+  // Paid leave needs a paid activity of its own. Until it had one, the PTO
+  // schedule activity pointed at Unpaid Time Off, so a planned day of holiday
+  // resolved to unpaid — and the pairing check would have called any timecard
+  // row built from it an error.
+  { code: '99-004', name: 'Paid Time Off', paid: true, productive: false, family: 'Absence', defaultCode: 'PTO' },
 ];
 
 export const ACTIVITY_MAP = new Map(ACTIVITIES.map((a) => [a.code, a]));
@@ -126,7 +131,7 @@ export const SCHEDULE_ACTIVITIES = [
   { key: 'EXTRA_HOURS', name: 'Extra Hours', activity: '07-001' },
   { key: 'FLEX_UP', name: 'Flex Up', activity: '01-001' },
   { key: 'FLEX_DOWN', name: 'Flex Down', activity: '02-001' },
-  { key: 'PTO', name: 'Paid Time Off', activity: '99-002' },
+  { key: 'PTO', name: 'Paid Time Off', activity: '99-004' },
   { key: 'UTO', name: 'Unpaid Time Off', activity: '99-002' },
   { key: 'SHIFT_END', name: 'End of Shift', activity: '' },
 ] as const;

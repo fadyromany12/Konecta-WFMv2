@@ -130,6 +130,8 @@ export interface Timecard {
   inProgress: boolean;
   edited: boolean;
   correctionReason: string | null;
+  /** How a worked public holiday was settled; null while nobody has chosen. */
+  holidayElection: HolidayElection | null;
   exceptions: string[];
   notes: string[];
   issues: Issue[];
@@ -186,6 +188,71 @@ export interface PayrollSummaryRow {
   protectDate: string | null;
   hasErrors: boolean;
   exceptions: string[];
+  dayCharacter: DayCharacter;
+  holidayElection: HolidayElection | null;
+  electionOutstanding: boolean;
+  /** Cost, in hours at the base rate. No salary is held anywhere in Pulse. */
+  paid: string;
+  premium: string;
+  paidMinutes: number;
+  premiumMinutes: number;
+  payLines: PayLine[];
+  payNotes: string[];
+}
+
+export type DayCharacter = 'ORDINARY' | 'REST_DAY' | 'PUBLIC_HOLIDAY';
+export type HolidayElection = 'PAY_3X' | 'PAY_2X_PLUS_DAY';
+
+export interface PayLine {
+  kind: 'REGULAR' | 'OVERTIME_DAY' | 'OVERTIME_NIGHT' | 'REST_DAY' | 'PUBLIC_HOLIDAY' | 'PAID_TIME_OFF';
+  label: string;
+  minutes: number;
+  multiplier: number;
+  paidMinutes: number;
+}
+
+export interface PayRates {
+  overtimeDay: number;
+  overtimeNight: number;
+  nightFrom: string;
+  nightTo: string;
+  restDayWorked: number;
+  holidayWorked: number;
+  holidayWorkedWithDayInLieu: number;
+  dayInLieuHours: number;
+  dailyNormHours: number;
+}
+
+export interface PublicHoliday {
+  date: string;
+  name: string;
+  basis: 'GREGORIAN' | 'COPTIC' | 'ISLAMIC';
+  /** True while the date is still the calendar's guess rather than a decision. */
+  estimated: boolean;
+  confirmed: boolean;
+}
+
+export interface PayBreakdown {
+  dayCharacter: DayCharacter;
+  election: HolidayElection | null;
+  electionOutstanding: boolean;
+  lines: PayLine[];
+  workedMinutes: number;
+  paidMinutes: number;
+  premiumMinutes: number;
+  dayInLieuHours: number;
+  notes: string[];
+  formatted: { worked: string; paid: string; premium: string };
+}
+
+export interface CostTotal {
+  workedMinutes: number;
+  paidMinutes: number;
+  premiumMinutes: number;
+  dayInLieuHours: number;
+  electionsOutstanding: number;
+  byKind: Record<string, number>;
+  formatted: { worked: string; paid: string; premium: string };
 }
 
 export interface ClockState {
