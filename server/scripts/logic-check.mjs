@@ -280,7 +280,9 @@ console.log('=== WORKING TIME & LEAVE ===');
 check('team week reports who breaches a limit', typeof tw.body?.breaching === 'number');
 check('a breach names the rule it broke',
   (tw.body?.people ?? []).every((p) =>
-    (p.breaches ?? []).every((b) => ['rest','consecutive','weekly'].includes(b.kind) && b.message)));
+    (p.breaches ?? []).every((b) =>
+      ['rest','consecutive','weekly','daily','break','overtime'].includes(b.kind) && b.message)),
+  JSON.stringify((tw.body?.people ?? []).flatMap((p) => p.breaches ?? []).slice(0,2)));
 check('the seeded roster is mostly legal',
   (tw.body?.breaching ?? 99) <= 4, `${tw.body?.breaching} of ${tw.body?.people?.length} breaching`);
 check('every day carries a leave field',
@@ -424,7 +426,14 @@ check('an overlapping request is refused',
 check('a backwards range is refused',
   (await call('POST','/absence/requests',ADV,
     {accrualType:'VACATION',startDate:day(420),endDate:day(410),hours:8})).status === 400);
-const unpaidFar = day(500);
+/*
+ * A date unique to this run. The first version used a fixed day, which passed
+ * once and then failed against its own leftover on the next run — the overlap
+ * rule correctly refusing a request identical to the one the previous run had
+ * left on file. A check that only works on a fresh database is a check that
+ * will be ignored.
+ */
+const unpaidFar = day(600 + (Date.now() % 300));
 check('unpaid leave ignores the balance',
   (await call('POST','/absence/requests',ADV,
     {accrualType:'UNPAID',startDate:unpaidFar,endDate:unpaidFar,hours:9999})).status === 200);

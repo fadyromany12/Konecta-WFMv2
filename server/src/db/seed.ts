@@ -50,6 +50,21 @@ const DAY_SHIFT: SeedRow[] = [
 const DAY_END = '17:30';
 
 /**
+ * A day worked straight through, for the one advisor the break rule points at.
+ *
+ * The ordinary templates are compliant — they carry two breaks and a meal — so
+ * with only those the five hour rule would never fire on seeded data, and a
+ * warning that never fires teaches people the screen is decorative. This is the
+ * shape of a real breach: the meal pushed to the end of a busy afternoon, so
+ * the morning runs six and a half hours unbroken.
+ */
+const UNBROKEN_SHIFT: SeedRow[] = [
+  { time: '09:00', activityKey: 'SHIFT_START' },
+  { time: '15:30', activityKey: 'LUNCH' },
+  { time: '16:00', activityKey: 'OPEN_TIME' },
+];
+
+/**
  * Build the demonstration dataset. Safe to call at any time: it does nothing if
  * the database already has users unless `force` is set. Exported so a
  * serverless cold start can seed its own ephemeral database, which is how the
@@ -352,8 +367,11 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
       // the last thing you would do to somebody in their first fortnight.
       if (restDaysFor(userId).has(dow)) continue;
 
-      const template = night ? NIGHT_SHIFT : DAY_SHIFT;
-      const endTime = night ? NIGHT_END : DAY_END;
+      // One advisor works their mornings straight through, so the five hour
+      // break rule has something true to point at.
+      const worksThrough = userId === dayAdvisors[1];
+      const template = worksThrough ? UNBROKEN_SHIFT : night ? NIGHT_SHIFT : DAY_SHIFT;
+      const endTime = worksThrough ? DAY_END : night ? NIGHT_END : DAY_END;
 
       const rows = template.map((r) => ({
         startAt: stamp(date, r.time),

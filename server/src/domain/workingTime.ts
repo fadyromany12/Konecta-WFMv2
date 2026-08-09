@@ -29,26 +29,54 @@
  */
 
 import { diffDays, diffMinutes, type DateStr, type Stamp } from './time.js';
-import { shiftSpan, type ScheduleShift } from './schedule.js';
+import { shiftSpan, toSegments, type ScheduleShift } from './schedule.js';
 import type { Issue } from './timecard.js';
 
-/** Consecutive hours off between the end of one shift and the start of the next. */
+/**
+ * Consecutive hours off between the end of one shift and the start of the next.
+ *
+ * Not an Egyptian requirement — Egypt specifies a weekly rest rather than a
+ * turnaround — but kept deliberately as house policy, and explicitly unaffected
+ * by overtime: extra hours never excuse a short turnaround.
+ */
 export const MIN_REST_HOURS = 11;
-/** Days in a row before a rest day is owed. */
+/** Days in a row before a rest day is owed. Egypt: a weekly rest of 24 hours. */
 export const MAX_CONSECUTIVE_DAYS = 6;
-/** Paid hours in a rolling seven days. */
+/** Paid hours in a rolling seven days. Egypt: 48. */
 export const MAX_WEEKLY_HOURS = 48;
+/** Hours in one day before it is overtime. Egypt: 8. */
+export const MAX_DAILY_HOURS = 8;
+/**
+ * Consecutive worked hours before a break is owed. Egypt: 5.
+ *
+ * The most commonly breached rule in a contact centre, because a busy afternoon
+ * is exactly when a break gets pushed.
+ */
+export const MAX_HOURS_WITHOUT_BREAK = 5;
+/**
+ * Overtime in a day before it is worth remarking on.
+ *
+ * Overtime is uncapped by policy, so this never refuses. It is the statutory
+ * figure, kept so that passing it leaves a trace on the record.
+ */
+export const OVERTIME_NOTE_HOURS = 2;
 
 export interface WorkingTimeLimits {
   minRestHours: number;
   maxConsecutiveDays: number;
   maxWeeklyHours: number;
+  maxDailyHours: number;
+  maxHoursWithoutBreak: number;
+  overtimeNoteHours: number;
 }
 
 export const DEFAULT_LIMITS: WorkingTimeLimits = {
   minRestHours: MIN_REST_HOURS,
   maxConsecutiveDays: MAX_CONSECUTIVE_DAYS,
   maxWeeklyHours: MAX_WEEKLY_HOURS,
+  maxDailyHours: MAX_DAILY_HOURS,
+  maxHoursWithoutBreak: MAX_HOURS_WITHOUT_BREAK,
+  overtimeNoteHours: OVERTIME_NOTE_HOURS,
 };
 
 /** One day of somebody's roster, as the checks need to see it. */
@@ -58,7 +86,7 @@ export interface RosterDay {
 }
 
 export interface WorkingTimeBreach {
-  kind: 'rest' | 'consecutive' | 'weekly';
+  kind: 'rest' | 'consecutive' | 'weekly' | 'daily' | 'break' | 'overtime';
   /** The day the breach is attributed to. */
   date: DateStr;
   message: string;
@@ -188,6 +216,47 @@ export function checkWorkingTime(params: {
     }
   }
 
+  // --- Hours in a day, and the run before a break is owed.
+  //
+  // Both read the shift's own segments rather than its span, because a shift
+  // that runs 09:00 to 19:00 with a two hour meal in the middle is eight hours
+  // of work, not ten — and its longest unbroken run is what the break rule
+  // cares about, not its total.
+  for (const day of sorted) {
+    if (focus && !focus.has(day.date)) continue;
+    for (const shift of day.shifts) {
+      const worked = workingRuns(shift);
+      const total = worked.reduce((sum, run) => sum + run, 0);
+
+      if (total > limits.maxDailyHours * 60) {
+        const over = Math.round((total / 60 - limits.maxDailyHours) * 10) / 10;
+        breaches.push({
+          kind: over > limits.overtimeNoteHours ? 'overtime' : 'daily',
+          date: day.date,
+          over,
+          message:
+            over > limits.overtimeNoteHours
+              ? `${formatHours(total)} worked on ${day.date} — ${over} hours past the ` +
+                `${limits.maxDailyHours} hour day, and beyond the ${limits.overtimeNoteHours} hours ` +
+                'overtime the law contemplates. Allowed by policy; recorded here because it is unusual.'
+              : `${formatHours(total)} worked on ${day.date}, past the ${limits.maxDailyHours} hour day.`,
+        });
+      }
+
+      const longest = Math.max(0, ...worked);
+      if (longest > limits.maxHoursWithoutBreak * 60) {
+        breaches.push({
+          kind: 'break',
+          date: day.date,
+          over: Math.round((longest / 60 - limits.maxHoursWithoutBreak) * 10) / 10,
+          message:
+            `${formatHours(longest)} straight without a break on ${day.date} — ` +
+            `${limits.maxHoursWithoutBreak} hours is the maximum before one is owed.`,
+        });
+      }
+    }
+  }
+
   const relevant = focus ? breaches.filter((b) => focus.has(b.date)) : breaches;
 
   // One weekly breach is enough — every day of an over-long week reports the
@@ -208,6 +277,32 @@ function worstWeeklyOnly(breaches: WorkingTimeBreach[]): WorkingTimeBreach[] {
   const worst = weekly.reduce((a, b) => (b.over > a.over ? b : a));
   return breaches.filter((b) => b.kind !== 'weekly' || b === worst);
 }
+
+/**
+ * The unbroken runs of *work* inside a shift, in minutes.
+ *
+ * A break or a meal ends a run; everything else — phone time, training, a
+ * meeting — continues it, because the rule is about time on task rather than
+ * time on the queue. Returns one entry per run, so the caller can ask both for
+ * the total and for the longest.
+ */
+function workingRuns(shift: ScheduleShift): number[] {
+  const runs: number[] = [];
+  let current = 0;
+  for (const segment of toSegments(shift)) {
+    if (BREAK_ACTIVITIES.has(segment.activityKey)) {
+      if (current > 0) runs.push(current);
+      current = 0;
+      continue;
+    }
+    current += segment.minutes;
+  }
+  if (current > 0) runs.push(current);
+  return runs;
+}
+
+/** What counts as a break for the purposes of the five hour rule. */
+const BREAK_ACTIVITIES = new Set(['BREAK', 'LUNCH']);
 
 function formatHours(minutes: number): string {
   const hours = minutes / 60;

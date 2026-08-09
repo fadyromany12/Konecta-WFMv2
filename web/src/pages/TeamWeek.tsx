@@ -23,7 +23,7 @@ import { pulseSuccess } from '../lib/interaction';
  */
 
 interface Breach {
-  kind: 'rest' | 'consecutive' | 'weekly';
+  kind: 'rest' | 'consecutive' | 'weekly' | 'daily' | 'break' | 'overtime';
   date: string;
   message: string;
   over: number;
@@ -201,10 +201,10 @@ export function TeamWeek() {
 
       {breaching > 0 && (
         <Banner tone="warn">
-          {breaching} {breaching === 1 ? 'person' : 'people'} in this week breach a working-time limit — too
-          little rest between shifts, too many days in a row, or too many hours. Hover the ⚠ beside a name for
-          which. These are warnings, not refusals: somebody volunteering to cover is a real thing, and a tool
-          that blocked it would just be worked around on paper.
+          {breaching} {breaching === 1 ? 'person' : 'people'} in this week breach a working-time limit — five
+          hours without a break, too little rest between shifts, too many days in a row, or too many hours.
+          Hover the ⚠ beside a name for which. These are warnings, not refusals: somebody volunteering to cover
+          is a real thing, and a tool that blocked it would just be worked around on paper.
         </Banner>
       )}
 
@@ -393,7 +393,9 @@ function breachLabel(breaches: Breach[]): string {
   const kinds = new Set(breaches.map((b) => b.kind));
   const parts: string[] = [];
   if (kinds.has('rest')) parts.push('rest');
+  if (kinds.has('break')) parts.push('no break');
   if (kinds.has('consecutive')) parts.push('days in a row');
-  if (kinds.has('weekly')) parts.push('hours');
+  if (kinds.has('daily') || kinds.has('overtime')) parts.push('long day');
+  if (kinds.has('weekly')) parts.push('weekly hours');
   return parts.join(', ');
 }

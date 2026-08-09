@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkWorkingTime, type RosterDay } from '../workingTime.js';
+import { checkWorkingTime, DEFAULT_LIMITS, type RosterDay } from '../workingTime.js';
 import type { ScheduleShift } from '../schedule.js';
 
 /**
@@ -9,7 +9,34 @@ import type { ScheduleShift } from '../schedule.js';
  * shifts exactly backwards.
  */
 
+const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+const clock = (m: number) =>
+  `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+/**
+ * A realistic shift: work, a half hour meal in the middle, work.
+ *
+ * The fixtures used to be a single unbroken block, which was fine while nothing
+ * looked inside a shift — and then the five hour rule went in and every
+ * eight hour fixture was correctly in breach. A shift with no break at all is
+ * not a normal shift, and testing the other rules against one tests them
+ * against a case that should never reach production.
+ */
 function shift(date: string, from: string, to: string): ScheduleShift {
+  const mid = mins(from) + Math.floor((mins(to) - mins(from)) / 2);
+  return {
+    shiftNo: 1,
+    rows: [
+      { startAt: `${date} ${from}`, activityKey: 'SHIFT_START' },
+      { startAt: `${date} ${clock(mid)}`, activityKey: 'LUNCH' },
+      { startAt: `${date} ${clock(mid + 30)}`, activityKey: 'OPEN_TIME' },
+    ],
+    endAt: `${date} ${to}`,
+  };
+}
+
+/** One unbroken block, for the rules that are about exactly that. */
+function unbroken(date: string, from: string, to: string): ScheduleShift {
   return {
     shiftNo: 1,
     rows: [{ startAt: `${date} ${from}`, activityKey: 'SHIFT_START' }],
@@ -46,13 +73,7 @@ describe('rest between shifts', () => {
     // individually perfectly legal.
     const nights: RosterDay = {
       date: '2026-03-02',
-      shifts: [
-        {
-          shiftNo: 1,
-          rows: [{ startAt: '2026-03-02 23:00', activityKey: 'SHIFT_START' }],
-          endAt: '2026-03-03 07:30',
-        },
-      ],
+      shifts: [unbroken('2026-03-02', '23:00', '07:30')],
     };
     const breaches = checkWorkingTime({ days: [nights, day('2026-03-03', '09:00', '17:00')] });
     const rest = breaches.filter((b) => b.kind === 'rest');
@@ -72,16 +93,10 @@ describe('rest between shifts', () => {
   it('reports overlapping shifts in plain words rather than as negative rest', () => {
     const overlapping: RosterDay = {
       date: '2026-03-02',
-      shifts: [
-        {
-          shiftNo: 1,
-          rows: [{ startAt: '2026-03-02 20:00', activityKey: 'SHIFT_START' }],
-          endAt: '2026-03-03 12:00',
-        },
-      ],
+      shifts: [unbroken('2026-03-02', '20:00', '12:00')],
     };
     const breaches = checkWorkingTime({ days: [overlapping, day('2026-03-03', '09:00', '17:00')] });
-    expect(breaches[0].message).toContain('before the previous one has finished');
+    expect(breaches.some((b) => b.message.includes('before the previous one has finished'))).toBe(true);
   });
 
   it('ignores rest across a day nobody worked', () => {
@@ -165,7 +180,7 @@ describe('what gets reported', () => {
     expect(
       checkWorkingTime({
         days,
-        limits: { minRestHours: 8, maxConsecutiveDays: 6, maxWeeklyHours: 48 },
+        limits: { ...DEFAULT_LIMITS, minRestHours: 8 },
       }).filter((b) => b.kind === 'rest'),
     ).toEqual([]);
   });
@@ -173,5 +188,96 @@ describe('what gets reported', () => {
   it('says nothing about an empty roster', () => {
     expect(checkWorkingTime({ days: [] })).toEqual([]);
     expect(checkWorkingTime({ days: [day('2026-03-02')] })).toEqual([]);
+  });
+});
+
+describe('a break after five hours', () => {
+  it('accepts a shift broken by a meal', () => {
+    // 09:00–17:00 with a meal in the middle is two runs of under four hours.
+    const breaches = checkWorkingTime({ days: [day('2026-03-02', '09:00', '17:00')] });
+    expect(breaches.filter((b) => b.kind === 'break')).toEqual([]);
+  });
+
+  it('flags a shift with no break at all', () => {
+    const breaches = checkWorkingTime({
+      days: [{ date: '2026-03-02', shifts: [unbroken('2026-03-02', '09:00', '17:00')] }],
+    });
+    const brk = breaches.filter((b) => b.kind === 'break');
+    expect(brk).toHaveLength(1);
+    expect(brk[0].over).toBeCloseTo(3, 1);
+  });
+
+  it('measures the longest run, not the total', () => {
+    // Six hours, a break, then two. The total is legal for the day and the
+    // first run is not.
+    const long: ScheduleShift = {
+      shiftNo: 1,
+      rows: [
+        { startAt: '2026-03-02 08:00', activityKey: 'SHIFT_START' },
+        { startAt: '2026-03-02 14:00', activityKey: 'BREAK' },
+        { startAt: '2026-03-02 14:15', activityKey: 'OPEN_TIME' },
+      ],
+      endAt: '2026-03-02 16:15',
+    };
+    const brk = checkWorkingTime({ days: [{ date: '2026-03-02', shifts: [long] }] })
+      .filter((b) => b.kind === 'break');
+    expect(brk).toHaveLength(1);
+    expect(brk[0].over).toBeCloseTo(1, 1);
+  });
+
+  it('accepts exactly five hours', () => {
+    const exact: ScheduleShift = {
+      shiftNo: 1,
+      rows: [
+        { startAt: '2026-03-02 09:00', activityKey: 'SHIFT_START' },
+        { startAt: '2026-03-02 14:00', activityKey: 'LUNCH' },
+        { startAt: '2026-03-02 14:30', activityKey: 'OPEN_TIME' },
+      ],
+      endAt: '2026-03-02 16:30',
+    };
+    expect(
+      checkWorkingTime({ days: [{ date: '2026-03-02', shifts: [exact] }] }).filter((b) => b.kind === 'break'),
+    ).toEqual([]);
+  });
+});
+
+describe('hours in a day', () => {
+  it('accepts an eight hour day', () => {
+    // 08:30–17:00 with a half hour meal is exactly eight worked.
+    const breaches = checkWorkingTime({ days: [day('2026-03-02', '08:30', '17:00')] });
+    expect(breaches.filter((b) => b.kind === 'daily' || b.kind === 'overtime')).toEqual([]);
+  });
+
+  it('flags a day past eight hours', () => {
+    // 08:00–18:00 less a meal is nine and a half.
+    const breaches = checkWorkingTime({ days: [day('2026-03-02', '08:00', '18:00')] });
+    const daily = breaches.filter((b) => b.kind === 'daily');
+    expect(daily).toHaveLength(1);
+    expect(daily[0].over).toBeCloseTo(1.5, 1);
+  });
+
+  it('marks a day beyond the statutory overtime as unusual rather than refusing', () => {
+    // Overtime is uncapped by policy, so this is recorded, never blocked.
+    const breaches = checkWorkingTime({ days: [day('2026-03-02', '06:00', '20:00')] });
+    const over = breaches.filter((b) => b.kind === 'overtime');
+    expect(over).toHaveLength(1);
+    expect(over[0].message).toContain('Allowed by policy');
+  });
+
+  it('counts work, not the span — a long meal is not a long day', () => {
+    const split: ScheduleShift = {
+      shiftNo: 1,
+      rows: [
+        { startAt: '2026-03-02 09:00', activityKey: 'SHIFT_START' },
+        { startAt: '2026-03-02 13:00', activityKey: 'LUNCH' },
+        { startAt: '2026-03-02 15:00', activityKey: 'OPEN_TIME' },
+      ],
+      endAt: '2026-03-02 19:00',
+    };
+    // Ten hours end to end, eight of them worked.
+    expect(
+      checkWorkingTime({ days: [{ date: '2026-03-02', shifts: [split] }] })
+        .filter((b) => b.kind === 'daily' || b.kind === 'overtime'),
+    ).toEqual([]);
   });
 });
