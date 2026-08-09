@@ -79,6 +79,17 @@ export interface PayRates {
   dayInLieuHours: number;
   /** Hours in a day before the rest is overtime, for costing a plan. */
   dailyNormHours: number;
+  /** The shorter working day Egypt keeps through Ramadan. */
+  ramadanNormHours: number;
+  /**
+   * A shift ending at or after this time earns the night allowance.
+   *
+   * Deliberately *not* the same as the night overtime window. That one asks
+   * which hours were worked; this asks what kind of shift it was. Somebody
+   * finishing at 21:30 has worked a night shift by any ordinary reckoning and
+   * has not touched 22:00–06:00 at all.
+   */
+  nightAllowanceEndsAfter: TimeStr;
 }
 
 /**
@@ -99,6 +110,8 @@ export const EGYPT_RATES: PayRates = {
   holidayWorkedWithDayInLieu: 2,
   dayInLieuHours: 8,
   dailyNormHours: 8,
+  ramadanNormHours: 6,
+  nightAllowanceEndsAfter: '21:00',
 };
 
 export type PayKind =
@@ -556,6 +569,83 @@ export function nightMinutes(interval: Interval, from: TimeStr, to: TimeStr): nu
     date = addDays(date, 1);
   }
   return total;
+}
+
+/**
+ * Does this shift earn the night allowance?
+ *
+ * The test is when it *finishes*, not which hours it covers. Konecta pays a
+ * monthly allowance to people who work nights, and "worked a night" is a fact
+ * about the shift as a whole — somebody clocking off at 21:30 has worked one,
+ * and has not touched the statutory 22:00–06:00 window at all. The two rules
+ * answer different questions and both apply.
+ */
+export function earnsNightAllowance(shift: ScheduleShift, rates: PayRates = EGYPT_RATES): boolean {
+  const segments = toSegments(shift);
+  if (segments.length === 0) return false;
+  const endAt = segments[segments.length - 1].endAt;
+  const finish = toMinutes(endAt) - toMinutes(stamp(dateOf(endAt), '00:00'));
+  const threshold = hhmmToMinutes(rates.nightAllowanceEndsAfter);
+  // A shift running past midnight finishes on the following date, so its
+  // clock-time is small — but it is unambiguously a night. Anything that ends
+  // on a later day than it started qualifies whatever the clock says.
+  if (dateOf(endAt) !== dateOf(segments[0].startAt)) return true;
+  return finish >= threshold;
+}
+
+export interface NightAllowance {
+  /** Nights the roster asked for. */
+  scheduled: number;
+  /** Of those, the ones actually worked. */
+  worked: number;
+  /** `worked / scheduled`, or 0 when none were scheduled. */
+  proportion: number;
+  /** The same, as a percentage rounded to one place, for display. */
+  percent: number;
+  /** `20/22`, the form the allowance is actually discussed in. */
+  fraction: string;
+}
+
+/**
+ * How much of the monthly night allowance was earned.
+ *
+ * Deliberately a proportion rather than an amount. The allowance is a flat sum
+ * per month pro-rated by attendance — twenty nights worked of twenty-two
+ * rostered earns twenty twenty-seconds of it — and the sum belongs wherever
+ * payroll keeps salaries, not here. Pulse knows which nights were rostered and
+ * which were worked, which is the part payroll cannot work out for itself, and
+ * multiplying by a figure it should not be holding would add nothing.
+ *
+ * A night that was rostered and then lost to leave or absence counts as
+ * scheduled and not worked, which is what makes the fraction less than one.
+ */
+export function nightAllowance(days: { scheduled: boolean; worked: boolean }[]): NightAllowance {
+  const scheduled = days.filter((d) => d.scheduled).length;
+  const worked = days.filter((d) => d.scheduled && d.worked).length;
+  const proportion = scheduled === 0 ? 0 : worked / scheduled;
+  return {
+    scheduled,
+    worked,
+    proportion,
+    percent: Math.round(proportion * 1000) / 10,
+    fraction: `${worked}/${scheduled}`,
+  };
+}
+
+/**
+ * The daily norm in force on a date: shorter through Ramadan.
+ *
+ * Egypt keeps a six hour working day for the month, so overtime starts two
+ * hours earlier. Passed the Ramadan dates rather than working them out, because
+ * deciding what Ramadan is belongs to the calendar and those dates are settled
+ * by sighting rather than arithmetic.
+ */
+export function normHoursOn(date: DateStr, ramadan: ReadonlySet<DateStr>, rates: PayRates = EGYPT_RATES): number {
+  return ramadan.has(date) ? rates.ramadanNormHours : rates.dailyNormHours;
+}
+
+function hhmmToMinutes(time: TimeStr): number {
+  return Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 }
 
 /**

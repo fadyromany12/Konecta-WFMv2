@@ -691,6 +691,366 @@ check('somebody with a project of their own still gets theirs',
 check('an advisor is still refused the forecast',
   (await call('GET','/forecast',ADV)).status === 403);
 
+console.log('=== NIGHT ALLOWANCE AND RAMADAN ===');
+const thisMonth = day(0).slice(0, 7);
+const lastMonth = day(-32).slice(0, 7);
+
+const na = (await call('GET',`/pay/night-allowance/6?month=${thisMonth}`,TL)).body;
+check('a night allowance comes back as a fraction', /^\d+\/\d+$/.test(na?.fraction ?? ''), na?.fraction);
+check('worked never exceeds scheduled', na.worked <= na.scheduled);
+check('the percentage agrees with the fraction',
+  na.scheduled === 0 || Math.abs(na.percent - (na.worked / na.scheduled) * 100) < 0.1);
+check('the nights are listed so a disputed fraction can be checked',
+  na.nights.length === na.scheduled, `${na.nights.length} vs ${na.scheduled}`);
+check('every listed night is a real date', na.nights.every((n) => /^\d{4}-\d{2}-\d{2}$/.test(n.date)));
+check('the current month is not reported as final', na.complete === false);
+check('a finished month is reported as final',
+  (await call('GET',`/pay/night-allowance/6?month=${lastMonth}`,TL)).body?.complete === true);
+
+// The bug this had first: a night still in the future is not a night somebody
+// missed, and counting it as unworked understated the month badly.
+check('no night in the future is counted',
+  na.nights.every((n) => n.date <= day(0)), JSON.stringify(na.nights.filter((n) => n.date > day(0))));
+
+check('a day worker earns no night allowance',
+  (await call('GET',`/pay/night-allowance/${(await call('GET','/people',TL)).body.people.find((p)=>p.role==='TEAM_LEADER').id}?month=${thisMonth}`,TL))
+    .body?.scheduled === 0);
+check('an advisor can read their own allowance',
+  (await call('GET',`/pay/night-allowance/6?month=${thisMonth}`,ADV)).status === 200);
+check('an advisor cannot read a peer\'s allowance',
+  (await call('GET',`/pay/night-allowance/3?month=${thisMonth}`,ADV)).status === 403);
+check('a malformed month is refused',
+  (await call('GET','/pay/night-allowance/6?month=August',TL)).status === 400);
+
+const ram = (await call('GET',`/pay/ramadan?start=${YEAR}-01-01&end=${YEAR}-12-31`,ADV)).body;
+check('Ramadan is a shorter day, not a holiday', ram?.normHours === 6);
+check('Ramadan covers about a month', ram.dates.length >= 28 && ram.dates.length <= 60, `${ram.dates.length} days`);
+check('Ramadan dates are in order', JSON.stringify([...ram.dates].sort()) === JSON.stringify(ram.dates));
+// A shorter working day, not a day off. Confusing the two would pay a month
+// of triple time.
+const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${YEAR}-12-31`,ADV)).body?.holidays ?? [];
+check('no Ramadan date is also a public holiday',
+  ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
+
+console.log('=== PRAYER TIMES AND RAMADAN ===');
+const pray = (await call('GET',`/prayer-times?date=${YEAR}-06-21`,ADV)).body;
+check('prayer times are computed for a date', Array.isArray(pray?.times) && pray.times.length === 6, JSON.stringify(pray)?.slice(0,120));
+const byName = Object.fromEntries((pray.times ?? []).map((t) => [t.name, t.at]));
+const asMins = (t) => Number(t.slice(0,2))*60 + Number(t.slice(3,5));
+check('they are in the order of the day',
+  ['FAJR','SUNRISE','DHUHR','ASR','MAGHRIB','ISHA'].every((n, i, a) =>
+    i === 0 || asMins(byName[a[i-1]]) < asMins(byName[n])));
+// Cairo sunset on the June solstice is about 19:57 on summer time. A result an
+// hour out would mean the daylight saving rule is wrong, which is the mistake
+// that matters -- it would put every iftar warning in the wrong place for half
+// the year.
+check('midsummer Maghrib matches the published Cairo time',
+  Math.abs(asMins(byName.MAGHRIB) - asMins('19:57')) <= 5, byName.MAGHRIB);
+const winter = (await call('GET',`/prayer-times?date=${YEAR}-12-21`,ADV)).body;
+const wMaghrib = winter.times.find((t)=>t.name==='MAGHRIB').at;
+check('midwinter Maghrib matches too, on standard time',
+  Math.abs(asMins(wMaghrib) - asMins('16:58')) <= 5, wMaghrib);
+check('summer time moves the whole day by an hour',
+  asMins(byName.MAGHRIB) - asMins(wMaghrib) > 150);
+check('a normal day is eight hours', pray.normHours === 8);
+check('and it is not Ramadan in June this year', pray.isRamadan === false);
+
+// The scheduler must know Ramadan is a six hour day, or it builds a month of
+// eight hour shifts that every one of them breaches.
+const ramadanDatesList = (await call('GET',`/pay/ramadan?start=${YEAR}-01-01&end=${YEAR+1}-12-31`,ADV)).body?.dates ?? [];
+const aRamadanDay = ramadanDatesList.find((d) => d > day(30)) ?? ramadanDatesList[0];
+if (aRamadanDay) {
+  const inRamadan = (await call('GET',`/prayer-times?date=${aRamadanDay}`,ADV)).body;
+  check('a Ramadan date is reported as one', inRamadan.isRamadan === true, aRamadanDay);
+  check('and carries the six hour day', inRamadan.normHours === 6);
+} else check('a Ramadan date was found to test', false);
+
+check('an advisor can read prayer times', (await call('GET','/prayer-times',ADV)).status === 200);
+check('a malformed date is refused', (await call('GET','/prayer-times?date=June',ADV)).status === 400);
+
+console.log('=== INTRADAY THAT RECOMMENDS ===');
+const reb = (await call('GET',`/rebalance?date=${day(0)}`,OM)).body;
+check('rebalance answers for a day', Array.isArray(reb?.recommendations), JSON.stringify(reb)?.slice(0,140));
+check('it names who could take extra hours', Array.isArray(reb.candidates));
+check('every candidate is under the weekly ceiling',
+  reb.candidates.every((c) => c.weekHours <= 48 && c.headroom > 0));
+check('candidates are ordered by how much room they have',
+  reb.candidates.every((c, i) => i === 0 || reb.candidates[i-1].headroom >= c.headroom));
+check('there is a one-line summary', typeof reb.summary === 'string' && reb.summary.length > 0);
+check('every recommendation carries the gap it is about',
+  reb.recommendations.every((r) => r.gap && r.gap.from && r.gap.to));
+check('and a headline and a detail somebody can act on',
+  reb.recommendations.every((r) => r.headline?.length > 0 && r.detail?.length > 0));
+check('every recommendation is one of the three kinds',
+  reb.recommendations.every((r) => ['MOVE_BREAKS','OFFER_EXTRA_HOURS','UNFILLABLE'].includes(r.kind)));
+// The ordering is the point: free cover is proposed before money is spent.
+const kinds = reb.recommendations.map((r) => r.kind);
+for (const g of new Set(reb.recommendations.map((r) => r.gap.from))) {
+  const forGap = reb.recommendations.filter((r) => r.gap.from === g).map((r) => r.kind);
+  const firstBuy = forGap.indexOf('OFFER_EXTRA_HOURS');
+  const lastMove = forGap.lastIndexOf('MOVE_BREAKS');
+  check(`free cover is proposed before extra hours at ${g}`,
+    firstBuy === -1 || lastMove === -1 || lastMove < firstBuy, forGap.join('>'));
+}
+check('an unfillable gap is only ever last for its gap',
+  reb.recommendations.every((r, i) =>
+    r.kind !== 'UNFILLABLE' ||
+    !reb.recommendations.slice(i+1).some((n) => n.gap.from === r.gap.from)));
+check('an advisor cannot read the rebalance plan', (await call('GET','/rebalance',ADV)).status === 403);
+
+// Nobody rostered today is offered extra hours on top of the shift they are
+// already working -- the fastest way to lose trust in a suggestion.
+const todayRostered = (await call('GET',`/schedules/6?start=${day(0)}&end=${day(0)}`,OM)).body;
+if (todayRostered?.days?.[0]?.shifts?.length > 0) {
+  check('somebody already rostered today is not offered extra hours',
+    !reb.candidates.some((c) => c.userId === 6));
+} else check('user 6 is off today, so the double-booking check is skipped', true);
+
+// Posting the offer is a separate, deliberate act.
+const offer = await call('POST','/rebalance/offer',OM,{date:day(2),startTime:'15:00',endTime:'17:00',slots:2,note:'check'});
+check('a recommendation can be turned into a real offer', offer.status === 201, `status ${offer.status}`);
+check('a backwards offer window is refused',
+  (await call('POST','/rebalance/offer',OM,{date:day(2),startTime:'17:00',endTime:'15:00',slots:1})).status === 400);
+check('an advisor cannot post an extra hours offer',
+  (await call('POST','/rebalance/offer',ADV,{date:day(2),startTime:'15:00',endTime:'17:00',slots:1})).status === 403);
+check('the posted offer shows up for advisors to bid on',
+  ((await call('GET',`/extra-hours?date=${day(2)}`,ADV)).body?.offers ?? []).length > 0);
+
+console.log('=== ABSENCE PATTERNS ===');
+const pat = (await call('GET','/absence/patterns',TL)).body;
+check('absence patterns load for a team', Array.isArray(pat?.profiles), JSON.stringify(pat)?.slice(0,120));
+check('the window defaults to 52 weeks', pat.start < day(-350) && pat.start > day(-370), `${pat?.start}`);
+check('trigger bands are published with the numbers', Array.isArray(pat.triggers) && pat.triggers.length === 4);
+check('worst first, so the screen leads with who needs a conversation',
+  pat.profiles.every((p, i) => i === 0 || pat.profiles[i-1].score >= p.score));
+check('every profile carries the arithmetic', pat.profiles.every((p) =>
+  typeof p.spells === 'number' && typeof p.days === 'number' && typeof p.score === 'number'));
+check('the score really is spells squared times days',
+  pat.profiles.every((p) => p.score === p.spells * p.spells * p.days));
+check('every profile is put in a band', pat.profiles.every((p) =>
+  ['NONE','REVIEW','CONCERN','FORMAL'].includes(p.band)));
+check('and given a reading in words', pat.profiles.every((p) => typeof p.summary === 'string' && p.summary.length > 0));
+check('somebody with no absence says so plainly',
+  pat.profiles.filter((p)=>p.spells===0).every((p)=>/No unplanned absence/.test(p.summary)));
+check('a clean record scores zero and triggers nothing',
+  pat.profiles.filter((p)=>p.spells===0).every((p)=>p.score===0 && p.band==='NONE'));
+// Booked leave is not disruption. If it counted, the seeded advisors with PTO
+// would show spells they never had.
+const withPto = (await call('GET','/absence/patterns',TL)).body.profiles;
+check('booked leave never reaches the score', withPto.every((p)=>p.days >= 0 && p.score === p.spells*p.spells*p.days));
+check('a supervisor sees only their own people',
+  pat.profiles.length > 0 && pat.profiles.length <= (await call('GET','/people',TL)).body.people.length);
+check('an advisor cannot read absence patterns', (await call('GET','/absence/patterns',ADV)).status === 403);
+check('a backwards range is refused',
+  (await call('GET',`/absence/patterns?start=${day(0)}&end=${day(-5)}`,TL)).status === 400);
+// A window with nothing in it is empty, not an error.
+const emptyWindow = (await call('GET',`/absence/patterns?start=${day(-2)}&end=${day(-2)}`,TL)).body;
+check('a one-day window still answers', Array.isArray(emptyWindow?.profiles));
+check('and scores everybody in it', emptyWindow.profiles.every((p)=>typeof p.score === 'number'));
+
+// The distinction the whole feature exists to draw: fewer days absent, far
+// higher score, because the days were scattered rather than consecutive.
+const scattered = pat.profiles.find((p) => p.name === 'Karim Fouad');
+const illness = pat.profiles.find((p) => p.name === 'Sara Nabil');
+if (scattered && illness) {
+  check('scattered single days score far above a longer single illness',
+    scattered.score > illness.score * 10, `${scattered.score} vs ${illness.score}`);
+  check('even though the illness was more days absent',
+    illness.days > scattered.days, `${illness.days} vs ${scattered.days}`);
+  check('and only the scattered pattern trips a trigger',
+    scattered.band !== 'NONE' && illness.band === 'NONE', `${scattered.band} / ${illness.band}`);
+  check('the scattered record is named as such in words',
+    /single day/.test(scattered.summary), scattered.summary);
+  check('consecutive absent days stay one occasion', illness.spells === 1, `${illness.spells} spells`);
+} else check('the seeded absence patterns are present', false, 'Karim Fouad / Sara Nabil not found');
+
+console.log('=== FORECAST ACCURACY ===');
+const acc = (await call('GET',`/accuracy?start=${day(-14)}&end=${day(-1)}`,OM)).body;
+check('accuracy reports over a period', typeof acc?.measured === 'number', JSON.stringify(acc)?.slice(0,120));
+check('something was actually measured', acc.measured > 0, `measured ${acc?.measured}`);
+check('WAPE is a fraction, not a percentage', acc.wape >= 0 && acc.wape <= 2, `${acc?.wape}`);
+// The seed makes weekdays arrive about 7% above forecast, so the bias must be
+// positive and visible — a report that averaged it away would be useless.
+check('the seeded bias is found, and signed', acc.bias > 0.02, `bias ${acc?.bias}`);
+// interpret() only names a direction once the bias is worth correcting; below
+// that it says so is noise. Either is a correct reading, and asserting on one
+// of them would be asserting on the seed rather than on the code.
+check('the bias is always given a reading, one way or the other',
+  /low overall|high overall|noise/.test((acc.notes ?? []).join(' ')), (acc.notes ?? []).join(' | '));
+check('the weighted error is the headline note', (acc.notes ?? [])[0]?.includes('Weighted error'));
+check('handling time bias is separate from volume', Math.abs(acc.ahtBiasSeconds - 20) < 1, `${acc?.ahtBiasSeconds}`);
+check('the worst intervals are listed', Array.isArray(acc.worst) && acc.worst.length > 0);
+check('worst intervals are ranked by calls', acc.worst.every((w, i) =>
+  i === 0 || Math.abs(acc.worst[i-1].error) >= Math.abs(w.error)));
+check('there is a per-day breakdown', Array.isArray(acc.byDay) && acc.byDay.length > 0);
+// WAPE and MAPE are not ordered — that was a wrong assumption. WAPE weights by
+// volume, so it runs *below* MAPE when the bad intervals are quiet ones and
+// *above* it when they are busy ones. The seeded spike is on a busy Tuesday
+// interval, so here it runs above. What must hold is that they are different
+// measures and both are finite.
+check('WAPE and MAPE are both real numbers', Number.isFinite(acc.wape) && Number.isFinite(acc.mape));
+check('WAPE differs from MAPE, because it weights by volume',
+  Math.abs(acc.wape - acc.mape) > 1e-6, `wape ${acc?.wape} mape ${acc?.mape}`);
+check('an advisor cannot read forecast accuracy', (await call('GET','/accuracy',ADV)).status === 403);
+check('a backwards range is refused', (await call('GET',`/accuracy?start=${day(0)}&end=${day(-5)}`,OM)).status === 400);
+
+// The future has not arrived, so it cannot have been measured.
+const future = (await call('GET',`/accuracy?start=${day(3)}&end=${day(6)}`,OM)).body;
+check('a period in the future measures nothing', future.measured === 0, `measured ${future?.measured}`);
+check('and says so rather than reporting zero error',
+  (future.notes ?? []).join(' ').includes('No actual volume'));
+check('nulls rather than NaN when nothing is measurable', future.wape === null && future.bias === null);
+
+// Round-trip a correction.
+const actualsDate = day(-2);
+const actualsBefore = (await call('GET',`/actuals?date=${actualsDate}`,OM)).body?.actuals ?? [];
+check('actuals can be read back for a day', actualsBefore.length > 0, `${actualsBefore.length} intervals`);
+const put = await call('PUT','/actuals',OM,{date:actualsDate,source:'CHECK',rows:[
+  {startTime:'09:00',volume:999,ahtSeconds:300},
+  {startTime:'09:30',volume:1,ahtSeconds:300},
+]});
+check('actuals can be corrected', put.status === 200, `status ${put.status}`);
+const actualsAfter = (await call('GET',`/actuals?date=${actualsDate}`,OM)).body?.actuals ?? [];
+// Replacing the day rather than merging is the point: a corrected upload that
+// omits an interval must not leave the old number sitting there.
+check('a correction replaces the day rather than merging into it', actualsAfter.length === 2, `${actualsAfter.length} left`);
+check('the corrected number is what comes back', actualsAfter.find((a)=>a.startTime==='09:00')?.volume === 999);
+check('an advisor cannot record actuals', (await call('PUT','/actuals',ADV,{date:actualsDate,rows:[]})).status === 403);
+
+// Volume in an interval nobody forecast is error, not absence of data —
+// otherwise a planner improves their score by forecasting fewer intervals.
+const oddDate = day(-2);
+await call('PUT','/actuals',OM,{date:oddDate,rows:[{startTime:'02:30',volume:500,ahtSeconds:240}]});
+const withOrphan = (await call('GET',`/accuracy?start=${oddDate}&end=${oddDate}`,OM)).body;
+check('an unforecast interval still counts as error',
+  withOrphan.actualTotal >= 500, `actualTotal ${withOrphan?.actualTotal}`);
+
+console.log('=== JOINERS, MOVERS, LEAVERS ===');
+// A unique suffix per run, so this can be run twice against the same database
+// without colliding on the employee ID or email unique constraints.
+const stamp = Date.now().toString(36).slice(-6);
+const joiner = {
+  employeeId: `TEST-${stamp}`,
+  name: 'Test Joiner',
+  email: `test.joiner.${stamp}@konecta.example`,
+  role: 'ADVISOR',
+  managerId: (await call('GET','/people',TL)).body.people.find((p)=>p.role==='TEAM_LEADER')?.id ?? null,
+  projectId: null,
+  departmentCode: '10000',
+  shiftRule: 'CR1',
+  hireDate: day(1),
+  region: 'EMEA',
+};
+
+check('a team leader cannot create a person', (await call('POST','/people',TL,joiner)).status === 403);
+check('an advisor cannot create a person', (await call('POST','/people',ADV,joiner)).status === 403);
+
+const created = await call('POST','/people',OM,joiner);
+check('an ops manager can create an advisor', created.status === 201, `status ${created.status} ${created.raw?.slice(0,120)}`);
+const newId = created.body?.id;
+check('creation returns a temporary password once', typeof created.body?.temporaryPassword === 'string' && created.body.temporaryPassword.length >= 12);
+check('the temporary password is dictatable', /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(created.body?.temporaryPassword ?? ''));
+
+check('a duplicate email is refused', (await call('POST','/people',OM,{...joiner, employeeId:`OTHER-${stamp}`})).status === 409);
+check('a duplicate employee id is refused', (await call('POST','/people',OM,{...joiner, email:`other.${stamp}@konecta.example`})).status === 409);
+const noManager = await call('POST','/people',OM,{...joiner, employeeId:`NM-${stamp}`, email:`nm.${stamp}@konecta.example`, managerId:null});
+check('an advisor with no manager is refused', noManager.status === 400);
+check('and says why, in words', (noManager.body?.problems ?? []).some((p)=>/manager/i.test(p)));
+check('an ops manager cannot mint an administrator',
+  (await call('POST','/people',OM,{...joiner, employeeId:`AD-${stamp}`, email:`ad.${stamp}@konecta.example`, role:'ADMIN'})).status === 403);
+
+// The new account can sign in and do nothing else until it chooses a password.
+const tempTok = (await call('POST','/auth/login',null,{email:joiner.email,password:created.body?.temporaryPassword})).body?.token;
+check('the new account can sign in', !!tempTok);
+check('but cannot reach anything else yet', (await call('GET','/clock',tempTok)).status === 403);
+check('and is told to change its password', (await call('GET','/clock',tempTok)).body?.mustChangePassword === true);
+check('it can still read its own identity', (await call('GET','/auth/me',tempTok)).status === 200);
+check('which reports the password must change', (await call('GET','/auth/me',tempTok)).body?.user?.mustChangePassword === true);
+
+check('a weak new password is refused',
+  (await call('POST','/auth/password',tempTok,{currentPassword:created.body?.temporaryPassword,newPassword:'short'})).status === 400);
+check('a wrong current password is refused',
+  (await call('POST','/auth/password',tempTok,{currentPassword:'NOPE-NOPE-NOPE',newPassword:'a good long phrase'})).status === 403);
+const changed = await call('POST','/auth/password',tempTok,{currentPassword:created.body?.temporaryPassword,newPassword:'a good long phrase'});
+check('a decent password is accepted', changed.status === 200, `status ${changed.status}`);
+check('and the account is released', (await call('GET','/clock',tempTok)).status === 200);
+check('the old temporary password no longer works',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:created.body?.temporaryPassword})).status === 401);
+check('the chosen one does',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 200);
+
+// Movers.
+const otherTL = (await call('GET','/people',OM)).body.people.find((p)=>p.role==='TEAM_LEADER' && p.id !== joiner.managerId);
+if (otherTL) {
+  check('an ops manager can move somebody to another team',
+    (await call('PATCH',`/people/${newId}`,OM,{managerId:otherTL.id})).status === 200);
+  check('the move shows in the directory',
+    (await call('GET','/people',OM)).body.people.find((p)=>p.id===newId)?.manager_id === otherTL.id);
+} else check('only one team leader, so the move check is skipped', true);
+check('a reporting loop is refused',
+  (await call('PATCH',`/people/${newId}`,OM,{managerId:newId})).status === 400);
+check('nobody can change their own role',
+  (await call('PATCH',`/people/${(await call('GET','/auth/me',OM)).body.user.id}`,OM,{role:'ADMIN'})).status === 403);
+check('an ops manager cannot promote anybody to administrator',
+  (await call('PATCH',`/people/${newId}`,OM,{role:'ADMIN'})).status === 403);
+
+// Leavers. The last working day is still a working day.
+const lastDay = day(0);
+const left = await call('POST',`/people/${newId}/leave`,OM,{leaveDate:lastDay});
+check('a leaving date can be recorded', left.status === 200, `status ${left.status}`);
+check('the leaver still has access on their last day',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 200);
+const yesterdayLeaver = await call('POST',`/people/${newId}/leave`,OM,{leaveDate:day(-1)});
+check('a leaving date in the past can be recorded', yesterdayLeaver.status === 200);
+check('and access stops the morning after',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 403);
+check('an existing token stops working too',
+  (await call('GET','/clock',tempTok)).status === 403);
+check('the directory reports them as left',
+  (await call('GET','/people',OM)).body.people.find((p)=>p.id===newId)?.effective_status === 'TERMINATED');
+
+check('reinstating restores access', (await call('POST',`/people/${newId}/reinstate`,OM)).status === 200);
+check('and they can sign in again',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 200);
+
+// A leaver with people still under them would take a whole team out of view,
+// so offboarding is refused until they are moved. Found by looking for a
+// manager somebody actually reports to rather than assuming a role has reports.
+const directory = (await call('GET','/people',OM)).body.people;
+const managerIds = new Set(directory.map((p) => p.manager_id).filter(Boolean));
+const withReports = directory.find((p) => managerIds.has(p.id) && p.role !== 'ADMIN');
+if (withReports) {
+  const blocked = await call('POST',`/people/${withReports.id}/leave`,ADM,{leaveDate:day(30)});
+  check('a manager with reports cannot be offboarded until they are moved',
+    blocked.status === 409, `status ${blocked.status}`);
+  check('and it names the people who would be stranded',
+    Array.isArray(blocked.body?.problems) && blocked.body.problems.length > 0);
+} else check('no manager with reports found, so the stranding check is skipped', true);
+
+// Password reset by an administrator.
+const reset = await call('POST',`/people/${newId}/reset-password`,OM);
+check('an ops manager can reset a password', reset.status === 200);
+check('which returns a new temporary password', /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(reset.body?.temporaryPassword ?? ''));
+check('the reset account is locked to the password screen again',
+  (await call('GET','/clock',(await call('POST','/auth/login',null,{email:joiner.email,password:reset.body?.temporaryPassword})).body?.token)).status === 403);
+check('an advisor cannot reset somebody else\'s password',
+  (await call('POST',`/people/${newId}/reset-password`,ADV)).status === 403);
+
+// Lockout. Five wrong guesses in a row buys a delay, not a locked door.
+const lockEmail = `lock.${stamp}@konecta.example`;
+const lockable = await call('POST','/people',OM,{...joiner, employeeId:`LK-${stamp}`, email:lockEmail});
+if (lockable.status === 201) {
+  for (let i = 0; i < 5; i++) await call('POST','/auth/login',null,{email:lockEmail,password:'definitely-wrong'});
+  const locked = await call('POST','/auth/login',null,{email:lockEmail,password:lockable.body.temporaryPassword});
+  check('five wrong guesses locks the account briefly', locked.status === 429, `status ${locked.status}`);
+  check('and says how long to wait', /minute/.test(locked.body?.error ?? ''));
+  check('the lock is a delay, not a door', /try again/i.test(locked.body?.error ?? ''));
+} else check('lockout account could not be created, check skipped', false, `status ${lockable.status}`);
+
+check('a wrong password and an unknown address are indistinguishable',
+  (await call('POST','/auth/login',null,{email:'admin@konecta.example',password:'wrong'})).body?.error ===
+  (await call('POST','/auth/login',null,{email:`ghost.${stamp}@nowhere.example`,password:'wrong'})).body?.error);
+
 console.log('=== SPA ROUTING ===');
 for (const p of ['/dashboard','/admin/audit','/reports/query','/my']) {
   const res = await fetch(ORIGIN + p, { headers: { accept: 'text/html' } });

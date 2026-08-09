@@ -33,6 +33,8 @@ export interface UserRow {
   shift_rule: string;
   region: string;
   hire_date: string | null;
+  /** Last working day for a leaver. Null for everybody who is staying. */
+  leave_date: string | null;
 }
 
 export function getUser(id: number): Promise<UserRow | undefined> {

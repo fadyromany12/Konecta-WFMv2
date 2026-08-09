@@ -11,7 +11,7 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { audit, db, ensureSchema, transact } from './index.js';
+import { audit, db, ensureSchema, insertMany, transact } from './index.js';
 import { ACTIVITIES } from '../domain/reference.js';
 import type { ScheduleActivityKey } from '../domain/reference.js';
 import type { ScheduleShift } from '../domain/schedule.js';
@@ -117,6 +117,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
         'extra_hours_bids',
         'extra_hours_offers',
         'shift_swaps',
+        'actual_intervals',
         'forecast_intervals',
         'forecast_settings',
         'audit_log',
@@ -298,6 +299,73 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
     );
   }
 
+  /**
+   * The rest of the floor.
+   *
+   * Twelve advisors is enough to show every rule and far too few to show what
+   * the screens are like to *use*: a Team Week grid of twelve fits on one
+   * screen, a coverage chart of twelve is all noise and no shape, and a payroll
+   * summary of twelve never needs a filter. Two more team leaders with a dozen
+   * each puts it at a floor size somebody would recognise.
+   *
+   * The default differs by where it runs, because the constraint does.
+   *
+   * A serverless cold start has thirty seconds for the whole seed, and every
+   * advisor is another week of actuals and a month of roster. Production's own
+   * timeout gave the exchange rate: 7,403 statements bought thirty seconds, so
+   * roughly four milliseconds each. Twelve here keeps a fresh deployment at
+   * about the size that already succeeded, with twice the advisors in it.
+   *
+   * Nothing anywhere else is under that clock, so a machine with a real
+   * database gets a floor worth looking at. `PULSE_SEED_FLOOR` overrides both.
+   */
+  const FLOOR_SIZE = Math.max(
+    0,
+    Number(process.env.PULSE_SEED_FLOOR ?? (process.env.VERCEL ? 12 : 36)),
+  );
+  const FIRST_NAMES = [
+    'Ahmed', 'Mona', 'Youssef', 'Heba', 'Khaled', 'Aya', 'Mahmoud', 'Nada',
+    'Tarek', 'Rana', 'Sherif', 'Menna', 'Hany', 'Doaa', 'Wael', 'Asmaa',
+    'Ashraf', 'Reem', 'Emad', 'Shaimaa', 'Fady', 'Ghada', 'Sameh', 'Marwa',
+  ];
+  const LAST_NAMES = [
+    'Abdelrahman', 'Selim', 'Farag', 'Kamal', 'Sobhy', 'Ezzat', 'Nasser', 'Halim',
+    'Mansour', 'Rashad', 'Sabry', 'Zaghloul',
+  ];
+
+  const floorLeads: number[] = [];
+  const floorAdvisors: number[] = [];
+  if (FLOOR_SIZE > 0) {
+    const perTeam = 12;
+    for (let team = 0; team < Math.ceil(FLOOR_SIZE / perTeam); team++) {
+      const leadName = ['Ola Mokhtar', 'Bassem Riad', 'Injy Sherif', 'Hatem Zaki'][team % 4];
+      floorLeads.push(
+        await addUser({
+          employee_id: `TL000${310 + team}`,
+          name: `${leadName}${team > 3 ? ` ${team}` : ''}`,
+          email: emailFor(`${leadName} ${team}`),
+          role: 'TEAM_LEADER',
+          manager_id: omId,
+          project_id: team % 2 === 0 ? 'A123' : 'B900',
+        }),
+      );
+    }
+    for (let i = 0; i < FLOOR_SIZE; i++) {
+      const name = `${FIRST_NAMES[i % FIRST_NAMES.length]} ${LAST_NAMES[Math.floor(i / FIRST_NAMES.length) % LAST_NAMES.length]}`;
+      floorAdvisors.push(
+        await addUser({
+          employee_id: `AD000${1401 + i}`,
+          name,
+          email: emailFor(`${name} ${i}`),
+          role: 'ADVISOR',
+          manager_id: floorLeads[Math.floor(i / perTeam)],
+          project_id: (Math.floor(i / perTeam)) % 2 === 0 ? 'A123' : 'B900',
+          shift_rule: ['CR1', 'CR2', 'CR3'][i % 3],
+        }),
+      );
+    }
+  }
+
   const newHires: number[] = [];
   for (const [i, name] of ['Salma Reda', 'Tamer Wael'].entries()) {
     newHires.push(
@@ -338,6 +406,15 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   await ruleChange(dayAdvisors[0], 'CR3', addDays(today, 21), tlDayId);
 
   const FROM = -14;
+  /**
+   * How far back the wider floor carries punches and timecards.
+   *
+   * The core cast keeps the full window because the training scenarios live in
+   * it. Everybody else gets a week, which is what the live screens read, and
+   * which is the difference between a seed that fits inside a serverless
+   * function's thirty seconds and one that does not.
+   */
+  const ACTUALS_FROM = -7;
   // Schedules are published two days ahead; the forecast runs a week out. The
   // gap between them is deliberate — it is what the planner fills, and what
   // gives auto-scheduling something to actually do.
@@ -352,7 +429,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   // as one that always does — and before this, all sixteen were in breach.
   const overworked = new Set([nightAdvisors[0], dayAdvisors[0]]);
 
-  const allAdvisors = [...nightAdvisors, ...dayAdvisors];
+  const allAdvisors = [...nightAdvisors, ...dayAdvisors, ...floorAdvisors];
 
   /**
    * The two days off in every seven — a fixed rota line per person.
@@ -386,10 +463,14 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
     // seed that empties the roster on Friday and Saturday means the live board
     // is blank for two days in seven, which reads as a broken screen rather
     // than a quiet one. The weekend line below is what keeps it staffed.
-    for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
+    for (const userId of [...nightAdvisors, ...dayAdvisors, ...floorAdvisors, ...newHires]) {
       const night = nightAdvisors.includes(userId);
       const isNewHire = newHires.includes(userId);
       if (isNewHire && offset < -9) continue;
+      // Past roster earns its keep by being something the timecards can be
+      // compared against. The wider floor has no timecards that far back, so a
+      // schedule there would be a plan nobody worked and nobody checked.
+      if (offset < ACTUALS_FROM && floorAdvisors.includes(userId)) continue;
       // New hires get the same two days off as anybody else. Exempting them
       // put a class of trainees on seven day weeks, which is both illegal and
       // the last thing you would do to somebody in their first fortnight.
@@ -432,6 +513,10 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
       });
 
       if (offset > 0) continue; // nothing has been punched in the future
+      // See the note by the timecard loop: the wider floor carries a week of
+      // actuals rather than three, because what they exist for is making the
+      // live screens look like a real floor.
+      if (offset < ACTUALS_FROM && floorAdvisors.includes(userId)) continue;
 
       // Today's punches are emitted only up to the current moment, so a shift
       // that is part way through looks part way through rather than abandoned.
@@ -450,7 +535,14 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   // ---------------------------------------------- generate the resulting cards
   for (let offset = FROM; offset <= 0; offset++) {
     const date = addDays(today, offset);
-    for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
+    for (const userId of [...nightAdvisors, ...dayAdvisors, ...floorAdvisors, ...newHires]) {
+      // The wider floor exists to make the live screens look like a real floor
+      // — Team Week, coverage, today's payroll. None of that needs three weeks
+      // of history per person, and generating it is what pushed the seed back
+      // over a serverless function's thirty seconds. They get a week; the core
+      // cast, whose weeks the training scenarios are built around, gets all of
+      // it.
+      if (offset < ACTUALS_FROM && floorAdvisors.includes(userId)) continue;
       await generateTimecard({ userId, date, actorId: adminId, now: nowStamp() });
     }
   }
@@ -478,7 +570,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
 
   // ------------------------------------------------------------------ accruals
   const ACCRUAL_SQL = 'INSERT INTO accruals (user_id, accrual_type, balance_hours, as_of) VALUES (?, ?, ?, ?)';
-  for (const [i, userId] of [...nightAdvisors, ...dayAdvisors, ...newHires].entries()) {
+  for (const [i, userId] of [...nightAdvisors, ...dayAdvisors, ...floorAdvisors, ...newHires].entries()) {
     await db.run(ACCRUAL_SQL, [userId, 'VACATION', 40 + i * 3.5, today]);
     await db.run(ACCRUAL_SQL, [userId, 'SICK', 16 + (i % 4) * 4, today]);
   }
@@ -674,6 +766,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   ];
 
   await transact(async () => {
+    const intervals: unknown[][] = [];
     for (let offset = -14; offset <= 7; offset++) {
       const date = addDays(today, offset);
       const dow = new Date(date + 'T00:00:00Z').getUTCDay();
@@ -688,11 +781,127 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
         // actually spends their time on.
         const volume = Math.round(share * 11 * dayFactor);
         const aht = 210 + ((i * 13) % 70); // handling time drifts through the day
+        intervals.push(['A123', date, startTime, volume, aht]);
+      }
+    }
+    // Forty-eight intervals a day across three weeks was over a thousand
+    // statements on its own — the single largest thing the seed did.
+    await insertMany(
+      'forecast_intervals',
+      ['project_id', 'date', 'start_time', 'volume', 'aht_seconds'],
+      intervals,
+    );
+
+    // What actually arrived, for the days that have already happened. Without
+    // this the accuracy screen is correct and empty, which demonstrates
+    // nothing — and the whole point of the loop is that somebody looks at the
+    // number and changes the next forecast.
+    //
+    // Shaped rather than randomised: the forecast runs about 7% low on
+    // weekdays and handling time about 20 seconds long, so the report has a
+    // real bias to find and a planner has something to correct. A couple of
+    // intervals are badly out so the "worst intervals" list is not empty.
+    const actuals: unknown[][] = [];
+    for (const row of intervals) {
+      const [, date, startTime, volume, aht] = row as [string, string, string, number, number];
+      if (date >= today) continue; // the future has not arrived yet
+      const dow = new Date(date + 'T00:00:00Z').getUTCDay();
+      const drift = dow === 5 || dow === 6 ? 0.98 : 1.07;
+      // A deterministic wobble, so two runs of the seed produce the same
+      // numbers and a check can assert against them.
+      const wobble = 1 + (((date.charCodeAt(9) + startTime.charCodeAt(1)) % 9) - 4) / 100;
+      const spike = startTime === '11:00' && dow === 2 ? 1.6 : 1;
+      actuals.push([
+        'A123',
+        date,
+        startTime,
+        Math.max(0, Math.round(volume * drift * wobble * spike)),
+        aht + 20,
+        'SEED',
+      ]);
+    }
+    await insertMany(
+      'actual_intervals',
+      ['project_id', 'date', 'start_time', 'volume', 'aht_seconds', 'source'],
+      actuals,
+    );
+  });
+
+  // ------------------------------------------------------- absence patterns
+  //
+  // A scattered attendance record for one advisor, spread across the rolling
+  // 52 week window rather than the three weeks of full history.
+  //
+  // Without it the Bradford screen is correct and says nothing: three weeks of
+  // data cannot contain a pattern, so every advisor scores under the first
+  // trigger and the bands are decoration. Six single days at roughly monthly
+  // intervals is what a genuinely disruptive record looks like — 6² × 6 = 216,
+  // which lands in CONCERN — and it is precisely the shape that a daily
+  // absence list makes invisible.
+  //
+  // Deliberately paired with a longer illness on somebody else, so the screen
+  // demonstrates the distinction it exists to draw: more days absent, far
+  // lower score.
+  await transact(async () => {
+    const scattered = nightAdvisors[1]; // Karim Fouad
+    const days = [-31, -66, -101, -140, -178, -215].map((offset) => addDays(today, offset));
+    for (const date of days) {
+      const cardId = await db.insert(
+        `INSERT INTO timecards (user_id, payroll_date, shift_no, approved, edited, updated_at)
+         VALUES (?, ?, 1, 1, 1, ?)`,
+        [scattered, date, nowStamp()],
+      );
+      await db.run(
+        `INSERT INTO timecard_rows (timecard_id, code, project, activity, start_at, end_at, sort_order)
+         VALUES (?, 'ABS', 'A123', '99-003', ?, ?, 0)`,
+        [cardId, stamp(date, '09:00'), stamp(date, '17:30')],
+      );
+      // A rostered day underneath each one, *and the days either side*.
+      //
+      // The day either side is not decoration. Spells are joined when the
+      // rostered day immediately before an absence was also an absence, and
+      // with only the absent days on the roster each one's predecessor is the
+      // previous absence — so six separate occasions three months apart
+      // chained into a single spell and scored 6 instead of 216. Rostering the
+      // surrounding days is what a real roster looks like, and it is what
+      // makes these read as six distinct occasions.
+      for (const around of [addDays(date, -1), date, addDays(date, 1)]) {
         await db.run(
-          'INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds) VALUES (?, ?, ?, ?, ?)',
-          ['A123', date, startTime, volume, aht],
+          `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, status, updated_at)
+           VALUES (?, ?, 1, ?, 'PUBLISHED', ?)`,
+          [scattered, around, stamp(around, '17:30'), nowStamp()],
         );
       }
+    }
+
+    const ill = nightAdvisors[2]; // Sara Nabil
+    for (let i = 0; i < 9; i++) {
+      const date = addDays(today, -120 + i);
+      const cardId = await db.insert(
+        `INSERT INTO timecards (user_id, payroll_date, shift_no, approved, edited, updated_at)
+         VALUES (?, ?, 1, 1, 1, ?)`,
+        [ill, date, nowStamp()],
+      );
+      await db.run(
+        `INSERT INTO timecard_rows (timecard_id, code, project, activity, start_at, end_at, sort_order)
+         VALUES (?, 'SCK', 'A123', '99-003', ?, ?, 0)`,
+        [cardId, stamp(date, '09:00'), stamp(date, '17:30')],
+      );
+      await db.run(
+        `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, status, updated_at)
+         VALUES (?, ?, 1, ?, 'PUBLISHED', ?)`,
+        [ill, date, stamp(date, '17:30'), nowStamp()],
+      );
+    }
+    // Bound the illness with rostered days either side, so it is nine
+    // consecutive absences inside a working stretch rather than nine days
+    // floating with nothing before or after them.
+    for (const around of [addDays(today, -121), addDays(today, -111)]) {
+      await db.run(
+        `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, status, updated_at)
+         VALUES (?, ?, 1, ?, 'PUBLISHED', ?)`,
+        [ill, around, stamp(around, '17:30'), nowStamp()],
+      );
     }
   });
 

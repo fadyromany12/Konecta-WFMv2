@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { useT } from '../i18n';
+import { LocaleSwitch } from '../components/LocaleSwitch';
 import { useSession } from '../state';
 import { Banner, Button, Card } from '../components/ui';
 
@@ -12,6 +14,7 @@ const DEMO = [
 
 export function Login() {
   const { signIn } = useSession();
+  const t = useT();
   const [email, setEmail] = useState('youssef.adel@konecta.example');
   const [password, setPassword] = useState('pulse123');
   const [error, setError] = useState<string | null>(null);
@@ -42,11 +45,15 @@ export function Login() {
           Planning · Utilization · Labor · Scheduling · Exceptions
         </p>
 
+        <div className="login-locale">
+          <LocaleSwitch />
+        </div>
+
         <Card>
           {error && <Banner tone="error">{error}</Banner>}
           <form onSubmit={submit}>
             <label>
-              Email
+              {t('Email address')}
               <input
                 type="email"
                 value={email}
@@ -56,7 +63,7 @@ export function Login() {
               />
             </label>
             <label>
-              Password
+              {t('Password')}
               <input
                 type="password"
                 value={password}
@@ -66,7 +73,7 @@ export function Login() {
               />
             </label>
             <Button variant="primary" type="submit" disabled={busy}>
-              {busy ? 'Signing in…' : 'Sign in'}
+              {busy ? t('Signing in…') : t('Sign in')}
             </Button>
           </form>
 

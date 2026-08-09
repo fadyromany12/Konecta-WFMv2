@@ -4,8 +4,11 @@ import {
   costShift,
   costTimecard,
   dayCharacter,
+  earnsNightAllowance,
+  nightAllowance,
   nightMinutes,
   noCost,
+  normHoursOn,
   totalCost,
   type PayKind,
 } from '../pay.js';
@@ -345,5 +348,100 @@ describe('the rates themselves', () => {
       rates: { ...EGYPT_RATES, overtimeDay: 1.5 },
     });
     expect(paidOf('OVERTIME_DAY', b)).toBe(180);
+  });
+});
+
+describe('the night allowance', () => {
+  const shiftEnding = (start: string, end: string): ScheduleShift => ({
+    shiftNo: 1,
+    rows: [{ startAt: `2026-05-04 ${start}`, activityKey: 'OPEN_TIME' }],
+    endAt: end.startsWith('+') ? `2026-05-05 ${end.slice(1)}` : `2026-05-04 ${end}`,
+  });
+
+  it('is earned by a shift that finishes after nine', () => {
+    expect(earnsNightAllowance(shiftEnding('13:00', '21:30'))).toBe(true);
+  });
+
+  it('is earned exactly at nine', () => {
+    expect(earnsNightAllowance(shiftEnding('13:00', '21:00'))).toBe(true);
+  });
+
+  it('is not earned by a day shift', () => {
+    expect(earnsNightAllowance(shiftEnding('09:00', '17:30'))).toBe(false);
+  });
+
+  it('is earned by a shift running past midnight', () => {
+    // Its finishing clock time is 07:30, which is early rather than late. Read
+    // naively that is a day shift, and it is the most obviously night shift
+    // there is.
+    expect(earnsNightAllowance(shiftEnding('23:00', '+07:30'))).toBe(true);
+  });
+
+  it('is earned before the statutory night window is even touched', () => {
+    // 21:30 earns the allowance and contains no 22:00-06:00 hours at all. The
+    // two rules answer different questions, which is the whole point.
+    const shift = shiftEnding('13:00', '21:45');
+    expect(earnsNightAllowance(shift)).toBe(true);
+    expect(costShift({ shift, dayCharacter: 'ORDINARY' }).lines.some((l) => l.kind === 'OVERTIME_NIGHT')).toBe(false);
+  });
+});
+
+describe('how much of the night allowance was earned', () => {
+  const nights = (scheduled: number, worked: number) =>
+    Array.from({ length: scheduled }, (_, i) => ({ scheduled: true, worked: i < worked }));
+
+  it('reports the fraction the allowance is discussed in', () => {
+    const a = nightAllowance(nights(22, 20));
+    expect(a.fraction).toBe('20/22');
+    expect(a.percent).toBe(90.9);
+  });
+
+  it('is whole when every rostered night was worked', () => {
+    expect(nightAllowance(nights(22, 22)).proportion).toBe(1);
+  });
+
+  it('counts a rostered night lost to absence as not worked', () => {
+    const a = nightAllowance([...nights(21, 21), { scheduled: true, worked: false }]);
+    expect(a.fraction).toBe('21/22');
+  });
+
+  it('ignores days that were never rostered as nights', () => {
+    // Working a night nobody asked for does not inflate the denominator.
+    const a = nightAllowance([...nights(22, 22), { scheduled: false, worked: true }]);
+    expect(a.fraction).toBe('22/22');
+  });
+
+  it('does not divide by zero for somebody who works no nights', () => {
+    const a = nightAllowance([{ scheduled: false, worked: false }]);
+    expect(a.proportion).toBe(0);
+    expect(a.fraction).toBe('0/0');
+  });
+});
+
+describe('the Ramadan working day', () => {
+  const ramadan = new Set(['2026-02-18']);
+
+  it('is six hours inside Ramadan', () => {
+    expect(normHoursOn('2026-02-18', ramadan)).toBe(6);
+  });
+
+  it('is eight outside it', () => {
+    expect(normHoursOn('2026-05-04', ramadan)).toBe(8);
+  });
+
+  it('starts overtime two hours earlier', () => {
+    const shift: ScheduleShift = {
+      shiftNo: 1,
+      rows: [{ startAt: '2026-02-18 09:00', activityKey: 'OPEN_TIME' }],
+      endAt: '2026-02-18 17:00',
+    };
+    const normal = costShift({ shift, dayCharacter: 'ORDINARY' });
+    const fasting = costShift({
+      shift,
+      dayCharacter: 'ORDINARY',
+      rates: { ...EGYPT_RATES, dailyNormHours: normHoursOn('2026-02-18', ramadan) },
+    });
+    expect(paidOf('OVERTIME_DAY', normal)).toBe(0);
+    expect(paidOf('OVERTIME_DAY', fasting)).toBe(120 * 1.35);
   });
 });

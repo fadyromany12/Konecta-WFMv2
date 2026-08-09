@@ -19,6 +19,13 @@ import {
   releaseAlert,
 } from '../services/planning.js';
 import { intradaySnapshot } from '../services/intraday.js';
+import { accuracyFor, getActuals, saveActuals } from '../services/accuracy.js';
+import { absenceProfiles } from '../services/absencePatterns.js';
+import { rebalanceFor } from '../services/rebalance.js';
+import { ramadanAcross } from '../services/scheduling.js';
+import { PRAYER_LABELS, PRAYER_GRACE_MINUTES, prayerTimes } from '../domain/prayer.js';
+import { normHoursOn } from '../domain/pay.js';
+import { TRIGGERS } from '../domain/bradford.js';
 import {
   autoSchedule,
   coverageFor,
@@ -123,6 +130,168 @@ planning.get(
       getForecast(projectId, date),
     ]);
     res.json({ ...result, projectId, forecast });
+  }),
+);
+
+// ------------------------------------------------- prayer times and Ramadan
+//
+// Exposed so a planner can see where the day's fixed points are before
+// building breaks around them, rather than finding out from a warning after
+// they have saved.
+
+planning.get(
+  '/prayer-times',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const ramadan = ramadanAcross([date]);
+    res.json({
+      ...prayerTimes(date),
+      labels: PRAYER_LABELS,
+      isRamadan: ramadan.has(date),
+      normHours: normHoursOn(date, ramadan),
+      graceMinutes: PRAYER_GRACE_MINUTES,
+    });
+  }),
+);
+
+// ------------------------------------------------------------- rebalance
+//
+// The live board says 15:00 is four short. This says what to do about it, in
+// the order a WFM analyst actually works in: move a break before buying an
+// hour, and say plainly when a gap cannot be closed at all.
+
+planning.get(
+  '/rebalance',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const projectId = await projectOf(req);
+    const userIds = await groupOf(req);
+    res.json(await rebalanceFor({ projectId, date, userIds }));
+  }),
+);
+
+/**
+ * Post the offer a recommendation asked for.
+ *
+ * Separate from the recommendation itself on purpose: the tool proposes and a
+ * supervisor decides. Auto-posting extra hours from a forecast would be
+ * spending money on an Erlang calculation nobody had looked at.
+ */
+planning.post(
+  '/rebalance/offer',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        project: z.string().optional(),
+        date: dateSchema,
+        startTime: timeSchema,
+        endTime: timeSchema,
+        slots: z.number().int().min(1).max(50),
+        note: z.string().max(400).optional(),
+      })
+      .parse(req.body);
+    if (body.endTime <= body.startTime) {
+      throw new HttpError(400, 'The offer ends before it starts.');
+    }
+    const projectId = await projectOf(req, body.project);
+    res.status(201).json(
+      await createOffer({
+        projectId,
+        date: body.date,
+        startTime: body.startTime,
+        endTime: body.endTime,
+        slots: body.slots,
+        note: body.note,
+        actorId: req.user!.id,
+      }),
+    );
+  }),
+);
+
+// ------------------------------------------------------ absence patterns
+//
+// Bradford weights frequency over duration, so this answers a question a daily
+// absence list cannot: who is absent *often*, as distinct from who has been
+// absent a lot of days.
+
+planning.get(
+  '/absence/patterns',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const end = dateSchema.parse(req.query.end ?? todayStr());
+    const start = req.query.start ? dateSchema.parse(req.query.start) : undefined;
+    if (start && start > end) throw new HttpError(400, 'The start date is after the end date.');
+    const userIds = await groupOf(req);
+    res.json({
+      ...(await absenceProfiles({ userIds, start, end })),
+      triggers: TRIGGERS,
+    });
+  }),
+);
+
+// ------------------------------------------------------- closing the loop
+//
+// The forecast is what somebody expected. These record what arrived and say
+// how far apart the two were.
+
+planning.get(
+  '/actuals',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const projectId = await projectOf(req);
+    res.json({ projectId, date, actuals: await getActuals(projectId, date) });
+  }),
+);
+
+planning.put(
+  '/actuals',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        project: z.string().optional(),
+        date: dateSchema,
+        source: z.string().optional(),
+        rows: z.array(
+          z.object({
+            startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+            volume: z.number().min(0),
+            ahtSeconds: z.number().int().min(0).nullable().default(null),
+          }),
+        ),
+      })
+      .parse(req.body);
+    const projectId = await projectOf(req, body.project);
+    const out = await saveActuals({
+      projectId,
+      date: body.date,
+      rows: body.rows,
+      actorId: req.user!.id,
+      source: body.source,
+    });
+    res.json({ ...out, projectId, date: body.date });
+  }),
+);
+
+planning.get(
+  '/accuracy',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const end = dateSchema.parse(req.query.end ?? todayStr());
+    const start = dateSchema.parse(req.query.start ?? addDays(end, -27));
+    if (start > end) throw new HttpError(400, 'The start date is after the end date.');
+    const projectId = await projectOf(req);
+    res.json(await accuracyFor({ projectId, start, end }));
   }),
 );
 

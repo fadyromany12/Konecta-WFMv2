@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { api, type ClockState } from '../api';
 import { useAsync, useSession } from '../state';
 import { relativeTime, useLive } from '../live';
+import { useT } from '../i18n';
 import { useToast } from '../components/Toast';
 import { Banner, Button, Card, Chip, Empty, Loading, Stamp } from '../components/ui';
 
 /** The web clock and the notifications waiting for this user. */
 export function Home() {
+  const t = useT();
   const { user } = useSession();
   const toast = useToast();
   const { notifications, markRead } = useLive();
@@ -80,7 +82,7 @@ export function Home() {
                       ))}
                     </select>
                     <Button variant="primary" disabled={busy || !state.canClockOn} onClick={() => punch('ON')}>
-                      Clock on
+                      {t('Clock on')}
                     </Button>
                   </>
                 ) : (
@@ -97,10 +99,10 @@ export function Home() {
                       onClick={() => punch('CHANGE')}
                       title={state.mealLockUntil ?? undefined}
                     >
-                      Change activity
+                      {t('Change activity')}
                     </Button>
                     <Button variant="danger" disabled={busy} onClick={() => punch('OFF')}>
-                      Clock off
+                      {t('Clock off')}
                     </Button>
                   </>
                 )}
@@ -162,8 +164,12 @@ export function Home() {
         {notifications.slice(0, 12).map((m) => (
           <div key={m.id} style={{ marginBottom: '0.7rem' }} onMouseEnter={() => !m.read && void markRead(m.id)}>
             <Banner tone={m.severity === 'WARN' ? 'warn' : 'info'}>
-              <strong>{m.subject}</strong>
-              <div>{m.body}</div>
+              {/* Notification text comes from the server and is English
+                  whatever the interface language is, so it has to declare its
+                  own direction rather than inherit the page's — otherwise its
+                  full stop is reordered to the front of the sentence. */}
+              <strong dir="auto">{m.subject}</strong>
+              <div dir="auto">{m.body}</div>
               <div className="muted">{relativeTime(m.createdAt)}</div>
             </Banner>
           </div>

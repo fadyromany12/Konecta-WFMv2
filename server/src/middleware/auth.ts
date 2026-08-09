@@ -2,6 +2,8 @@ import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { getUser, type UserRow } from '../services/people.js';
 import { SUPERVISOR_ROLES, type Role } from '../domain/reference.js';
+import { effectiveStatus } from '../domain/org.js';
+import { todayStr } from '../domain/time.js';
 
 const SECRET = process.env.PULSE_SECRET ?? 'konecta-pulse-development-secret';
 const TOKEN_TTL = '12h';
@@ -45,9 +47,21 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     // Access mirrors employment status: a user on leave or terminated in the HR
     // feed loses access, which is the single most common cause of a blocked
     // sign-in and worth saying plainly rather than as a generic error.
-    if (user.status !== 'ACTIVE') {
+    //
+    // Read through `effectiveStatus` rather than off the row, so a leaver's
+    // twelve-hour token stops working the morning after their last day instead
+    // of lasting until it expires on its own.
+    const status = effectiveStatus(user, todayStr());
+    if (status !== 'ACTIVE') {
       res.status(403).json({
-        error: `Your employment status is ${user.status}. Access is restricted until your HR record shows Active.`,
+        error: `Your employment status is ${status}. Access is restricted until your HR record shows Active.`,
+      });
+      return;
+    }
+    if (mustChangePasswordFirst(user, req)) {
+      res.status(403).json({
+        error: 'Choose a new password before continuing.',
+        mustChangePassword: true,
       });
       return;
     }
@@ -80,6 +94,32 @@ export function authenticateStream(req: Request, res: Response, next: NextFuncti
     req.headers.authorization = `Bearer ${req.query.token}`;
   }
   void authenticate(req, res, next);
+}
+
+/**
+ * Refuse everything except changing the password, when the password was issued
+ * by us rather than chosen by them.
+ *
+ * This is what makes a temporary password single-use. Without it, an account
+ * created with a password read down a phone stays usable with that password for
+ * as long as nobody gets round to changing it, and the "temporary" in the name
+ * is decoration.
+ *
+ * It lives inside `authenticate` rather than as its own middleware because that
+ * is the one place every authenticated route already passes through — three
+ * routers, each mounted twice, and a gate that has to be remembered per-route
+ * is a gate somebody forgets.
+ *
+ * Matched against the end of the URL because the same routers are mounted at
+ * both `/api` and the root, so the path a handler sees depends on which mount
+ * the request came through.
+ */
+const ALLOWED_WHILE_MUST_CHANGE = ['/auth/me', '/auth/password', '/catalog'];
+
+function mustChangePasswordFirst(user: UserRow, req: Request): boolean {
+  if (!(user as unknown as { must_change_password?: number }).must_change_password) return false;
+  const path = req.path.replace(/\/+$/, '');
+  return !ALLOWED_WHILE_MUST_CHANGE.some((allowed) => path.endsWith(allowed));
 }
 
 export function requireRole(...roles: Role[]) {

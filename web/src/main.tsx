@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { SessionProvider } from './state';
+import { I18nProvider } from './i18n';
 import { LiveProvider } from './live';
 import { ToastProvider } from './components/Toast';
 import './styles.css';
@@ -32,6 +33,7 @@ function Backdrop() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Backdrop />
+    <I18nProvider>
     <BrowserRouter>
       <SessionProvider>
         {/* Live sits inside Session because it needs the signed-in user, and
@@ -43,5 +45,6 @@ createRoot(document.getElementById('root')!).render(
         </LiveProvider>
       </SessionProvider>
     </BrowserRouter>
+    </I18nProvider>
   </StrictMode>,
 );

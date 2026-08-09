@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { holidaysFor, holidayRange } from '../holidays.js';
+import { holidaysFor, holidayRange, ramadanDates } from '../holidays.js';
 
 const on = (year: number, date: string) => holidaysFor(year).filter((h) => h.date === date);
 const named = (year: number, fragment: string) =>
@@ -103,3 +103,40 @@ describe('the calendar as a whole', () => {
 });
 
 const FIXED_DATES = new Set(['01-07', '01-25', '04-25', '05-01', '06-30', '07-23', '10-06']);
+
+describe('Ramadan', () => {
+  // Egypt shortens the working day for the month, so these dates decide when
+  // overtime starts — not just what the calendar says.
+  it('finds Ramadan in 2026', () => {
+    const days = [...ramadanDates(2026)].sort();
+    expect(days.length).toBeGreaterThan(25);
+    // 1 Ramadan 1447 falls on 18 February 2026 by the arithmetic calendar.
+    expect(days[0]).toBe('2026-02-18');
+  });
+
+  it('runs twenty-nine or thirty days', () => {
+    for (const year of [2025, 2026, 2027]) {
+      const days = [...ramadanDates(year)].filter((d) => d.startsWith(String(year)));
+      // A year can clip a Ramadan at either end, so only assert on a full one.
+      if (days.length > 25) expect(days.length).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it('ends the day before Eid al-Fitr', () => {
+    // Eid is 1 Shawwal, the day after Ramadan ends. If these disagree the two
+    // conversions are not talking about the same calendar.
+    const lastFast = [...ramadanDates(2026)].sort().pop()!;
+    const eid = holidaysFor(2026).find((h) => h.name.startsWith('Eid al-Fitr'))!;
+    expect(new Date(`${eid.date}T00:00:00Z`).getTime() - new Date(`${lastFast}T00:00:00Z`).getTime()).toBe(
+      86400000,
+    );
+  });
+
+  it('does not claim Ramadan is a public holiday', () => {
+    // It is a shorter working day, not a day off, and confusing the two would
+    // pay a month of triple time.
+    const inRamadan = [...ramadanDates(2026)];
+    const holidays = new Set(holidaysFor(2026).map((h) => h.date));
+    expect(inRamadan.filter((d) => holidays.has(d))).toHaveLength(0);
+  });
+});

@@ -47,6 +47,7 @@ export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body ?? {}),
+  patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body ?? {}),
   del: <T>(path: string) => request<T>('DELETE', path),
 };
 
@@ -63,8 +64,14 @@ export interface User {
   departmentCode: string;
   region: string;
   shiftRule: string;
+  status: string;
+  leaveDate: string | null;
   editWindowDays: number;
   isSupervisor: boolean;
+  /** Signed in on a password we issued: nothing works until it is changed. */
+  mustChangePassword: boolean;
+  /** The roles this person may hand out. Empty for everybody who cannot. */
+  canAdminister: User['role'][];
 }
 
 export interface Group {
@@ -85,6 +92,17 @@ export interface Person {
   status: string;
   shift_rule: string;
   manager_name: string | null;
+  manager_id: number | null;
+  /** Last working day, when one has been recorded. */
+  leave_date: string | null;
+  /**
+   * The status as of today, which differs from `status` for anybody inside a
+   * notice period — the row still says ACTIVE while they work it out.
+   */
+  effective_status: 'ACTIVE' | 'ON_LEAVE' | 'SUSPENDED' | 'TERMINATED';
+  /** Leaving, but not yet gone. */
+  leaving: boolean;
+  must_change_password: number;
 }
 
 export interface Issue {

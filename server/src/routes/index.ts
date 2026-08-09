@@ -9,11 +9,24 @@ import {
   EDIT_WINDOW_DAYS,
   MANUAL_CHECK_STATUSES,
   PRODUCT,
+  ROLES,
   ROLE_LABELS,
   SCHEDULE_ACTIVITIES,
   SHIFT_RULES,
   TIMECARD_CODES,
+  type Role,
 } from '../domain/reference.js';
+import { EMPLOYMENT_STATUSES, STATUS_LABELS, assignableRoles, effectiveStatus } from '../domain/org.js';
+import {
+  changeOwnPassword,
+  createPerson,
+  recordLeaver,
+  reinstate,
+  resetPassword,
+  setStatus,
+  signIn,
+  updatePerson,
+} from '../services/directory.js';
 import { buildAdherenceReport, punctuality } from '../domain/adherence.js';
 import { evaluateEdit } from '../domain/editWindow.js';
 import { assessApproval, assessRequest } from '../domain/leaveBalance.js';
@@ -54,7 +67,9 @@ import {
   EGYPT_RATES,
   actualCost,
   electHolidaySettlement,
+  nightAllowanceFor,
   plannedCost,
+  ramadanFor,
   summariseCost,
 } from '../services/pay.js';
 import {
@@ -78,24 +93,29 @@ api.post(
   '/auth/login',
   asyncRoute(async (req, res) => {
     const body = z.object({ email: z.string(), password: z.string() }).parse(req.body);
-    const user = await getUserByEmail(body.email);
-    if (!user || !bcrypt.compareSync(body.password, user.password_hash)) {
-      throw new HttpError(401, 'That email address and password do not match an account.');
+    const outcome = await signIn(body.email, body.password);
+    if (!outcome.ok || !outcome.user) {
+      throw new HttpError(outcome.status ?? 401, outcome.message ?? 'Sign in failed.');
     }
-    if (user.status !== 'ACTIVE') {
-      throw new HttpError(
-        403,
-        `Your employment status is ${user.status}. Access is restricted until your HR record shows Active.`,
-      );
-    }
-    const { password_hash: _ignored, ...safe } = user;
-    res.json({ token: signToken(user.id), user: shapeUser(safe) });
+    res.json({ token: signToken(outcome.user.id), user: shapeUser(outcome.user) });
   }),
 );
 
 api.get('/auth/me', authenticate, (req, res) => {
   res.json({ user: shapeUser(req.user!) });
 });
+
+api.post(
+  '/auth/password',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({ currentPassword: z.string(), newPassword: z.string() })
+      .parse(req.body);
+    await changeOwnPassword(req.user!.id, body.currentPassword, body.newPassword);
+    res.json({ ok: true, message: 'Password changed.' });
+  }),
+);
 
 function shapeUser(u: any) {
   return {
@@ -109,8 +129,12 @@ function shapeUser(u: any) {
     departmentCode: u.department_code,
     region: u.region,
     shiftRule: u.shift_rule,
+    status: u.status,
+    leaveDate: u.leave_date ?? null,
     editWindowDays: EDIT_WINDOW_DAYS[u.role as keyof typeof EDIT_WINDOW_DAYS],
     isSupervisor: u.role !== 'ADVISOR',
+    mustChangePassword: !!u.must_change_password,
+    canAdminister: assignableRoles(u.role as Role),
   };
 }
 
@@ -125,6 +149,9 @@ api.get('/catalog', authenticate, (_req, res) => {
     manualCheckStatuses: MANUAL_CHECK_STATUSES,
     editWindows: EDIT_WINDOW_DAYS,
     roleLabels: ROLE_LABELS,
+    roles: ROLES,
+    employmentStatuses: EMPLOYMENT_STATUSES,
+    statusLabels: STATUS_LABELS,
     today: todayStr(),
   });
 });
@@ -148,13 +175,22 @@ api.get(
       res.json({ people: [] });
       return;
     }
-    const people = await db.all(
+    const rows = await db.all<any>(
       `SELECT u.id, u.employee_id, u.name, u.email, u.role, u.project_id, u.department_code, u.status,
-              u.shift_rule, m.name AS manager_name
+              u.shift_rule, u.leave_date, u.manager_id, u.must_change_password, m.name AS manager_name
        FROM users u LEFT JOIN users m ON m.id = u.manager_id
        WHERE u.id IN (${placeholders(ids.length)}) ORDER BY u.name`,
       ids,
     );
+    // The stored status and today's status differ for anyone inside a notice
+    // period, and a directory that shows the stored one would list a leaver as
+    // Active on the day after they left.
+    const today = todayStr();
+    const people = rows.map((row) => ({
+      ...row,
+      effective_status: effectiveStatus(row, today),
+      leaving: !!row.leave_date && row.leave_date >= today,
+    }));
     res.json({ people });
   }),
 );
@@ -177,6 +213,101 @@ api.get(
       db.all('SELECT accrual_type, balance_hours, as_of FROM accruals WHERE user_id = ? ORDER BY accrual_type', [id]),
     ]);
     res.json({ person: shapeUser(user), project, shiftRule, shiftRuleHistory, accruals });
+  }),
+);
+
+// ------------------------------------------------- joiners, movers, leavers
+//
+// Everything below changes an employment record. `DirectoryError` carries the
+// status and the list of problems, so the handlers stay this thin and the
+// wording lives with the rule it belongs to.
+
+const roleSchema = z.enum(ROLES);
+
+api.post(
+  '/people',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        employeeId: z.string(),
+        name: z.string(),
+        email: z.string(),
+        role: roleSchema,
+        managerId: z.number().int().nullable().default(null),
+        projectId: z.string().nullable().default(null),
+        departmentCode: z.string().default('10000'),
+        shiftRule: z.string().default('CR1'),
+        hireDate: dateSchema.nullable().default(null),
+        region: z.string().default('EMEA'),
+      })
+      .parse(req.body);
+    res.status(201).json(await createPerson(req.user!, body));
+  }),
+);
+
+api.patch(
+  '/people/:id',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        name: z.string().optional(),
+        email: z.string().optional(),
+        role: roleSchema.optional(),
+        managerId: z.number().int().nullable().optional(),
+        projectId: z.string().nullable().optional(),
+        departmentCode: z.string().optional(),
+        shiftRule: z.string().optional(),
+        region: z.string().optional(),
+        hireDate: dateSchema.nullable().optional(),
+      })
+      .parse(req.body);
+    res.json(await updatePerson(req.user!, Number(req.params.id), body));
+  }),
+);
+
+api.post(
+  '/people/:id/leave',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const body = z.object({ leaveDate: dateSchema }).parse(req.body);
+    const out = await recordLeaver(req.user!, Number(req.params.id), body.leaveDate);
+    res.json({
+      ...out,
+      message: `Access ends after ${body.leaveDate}. They keep working until the end of that day.`,
+    });
+  }),
+);
+
+api.post(
+  '/people/:id/status',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const body = z.object({ status: z.enum(EMPLOYMENT_STATUSES) }).parse(req.body);
+    await setStatus(req.user!, Number(req.params.id), body.status);
+    res.json({ ok: true });
+  }),
+);
+
+api.post(
+  '/people/:id/reinstate',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    await reinstate(req.user!, Number(req.params.id));
+    res.json({ ok: true, message: 'Reinstated, with any lockout cleared.' });
+  }),
+);
+
+api.post(
+  '/people/:id/reset-password',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const password = await resetPassword(req.user!, Number(req.params.id));
+    res.json({
+      temporaryPassword: password,
+      message: 'Hand this over in person. It cannot be retrieved again, and it must be changed at sign-in.',
+    });
   }),
 );
 
@@ -618,6 +749,34 @@ api.get(
         'Rest day, public holiday and the day in lieu are Konecta policy. ' +
         'Premiums do not stack: the character of the day sets the rate for every hour worked in it.',
     });
+  }),
+);
+
+/** How much of the monthly night allowance somebody earned. */
+api.get(
+  '/pay/night-allowance/:userId',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const userId = Number(req.params.userId);
+    if (userId !== req.user!.id && !(await canManage(req.user!, userId))) {
+      throw new HttpError(403, 'You cannot see that.');
+    }
+    const month = z
+      .string()
+      .regex(/^\d{4}-\d{2}$/, 'Expected a YYYY-MM month')
+      .parse(req.query.month ?? todayStr().slice(0, 7));
+    res.json(await nightAllowanceFor({ userId, month, actorId: req.user!.id }));
+  }),
+);
+
+/** The dates Egypt keeps a six hour working day, which is when overtime starts. */
+api.get(
+  '/pay/ramadan',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 365));
+    res.json({ dates: [...(await ramadanFor(start, end))].sort(), normHours: EGYPT_RATES.ramadanNormHours });
   }),
 );
 
