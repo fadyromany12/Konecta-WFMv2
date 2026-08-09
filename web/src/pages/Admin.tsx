@@ -6,6 +6,7 @@ import { useAsync, useSession } from '../state';
 import { useToast } from '../components/Toast';
 import { Button, Card, Chip, DateField, Empty, GroupPicker, Loading, SkeletonTable, Toolbar } from '../components/ui';
 import { addDays, today } from '../lib/time';
+import { Directory } from './Directory';
 
 export function Admin() {
   return (
@@ -13,6 +14,7 @@ export function Admin() {
       <SubTabs
         items={[
           { to: '/admin', label: 'Details of Who' },
+          { to: '/admin/directory', label: 'People' },
           { to: '/admin/supervisor', label: 'Supervisor Admin' },
           { to: '/admin/alternate', label: 'Alternate Team Leader' },
           { to: '/admin/rules', label: 'Rules Log' },
@@ -21,6 +23,7 @@ export function Admin() {
       />
       <Routes>
         <Route index element={<DetailsOfWho />} />
+        <Route path="directory" element={<Directory />} />
         <Route path="supervisor" element={<SupervisorAdmin />} />
         <Route path="alternate" element={<AlternateUser />} />
         <Route path="rules" element={<RulesLog />} />

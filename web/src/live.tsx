@@ -112,7 +112,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   // ------------------------------------------------------------ the stream
   useEffect(() => {
-    if (!user) {
+    // An account still on an issued password is refused everything except the
+    // password screen, so connecting would 403 the notification poll and put
+    // the event stream into its retry loop — against a wall it cannot get past
+    // until the person has done the one thing being asked of them.
+    if (!user || user.mustChangePassword) {
       setConnected(false);
       setNotifications([]);
       return;
@@ -219,7 +223,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   // ----------------------------------------------------- notification list
   useEffect(() => {
-    if (!user) return;
+    // Same gate as the stream: an account that has not chosen a password yet
+    // cannot read its notifications, and polling every two minutes to be told
+    // so again helps nobody.
+    if (!user || user.mustChangePassword) return;
     refreshNotifications();
     // A slow poll so the badge is right even when the stream is not running.
     const timer = setInterval(refreshNotifications, 120000);

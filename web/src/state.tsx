@@ -9,6 +9,8 @@ interface Session {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => void;
   refreshGroups: () => Promise<void>;
+  /** Re-read the signed-in user, after they change something about themselves. */
+  refreshUser: () => Promise<void>;
 }
 
 const SessionContext = createContext<Session | null>(null);
@@ -39,7 +41,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const me = await api.get<{ user: User }>('/auth/me');
         if (cancelled) return;
         setUser(me.user);
-        await loadContext();
+        // An account that must change its password is refused everything else,
+        // including the two calls below. Asking anyway would throw and drop
+        // them back to the sign-in screen, where the same password would let
+        // them in and the same thing would happen again.
+        if (!me.user.mustChangePassword) await loadContext();
       } catch {
         setToken(null);
       } finally {
@@ -57,10 +63,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const res = await api.post<{ token: string; user: User }>('/auth/login', { email, password });
       setToken(res.token);
       setUser(res.user);
-      await loadContext();
+      if (!res.user.mustChangePassword) await loadContext();
     },
     [loadContext],
   );
+
+  const refreshUser = useCallback(async () => {
+    const me = await api.get<{ user: User }>('/auth/me');
+    setUser(me.user);
+    // Everything the rest of the app needs was skipped while the account was
+    // held at the password screen, so this is where it finally gets loaded.
+    if (!me.user.mustChangePassword) await loadContext();
+  }, [loadContext]);
 
   const signOut = useCallback(() => {
     setToken(null);
@@ -75,8 +89,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, catalog, groups, loading, signIn, signOut, refreshGroups }),
-    [user, catalog, groups, loading, signIn, signOut, refreshGroups],
+    () => ({ user, catalog, groups, loading, signIn, signOut, refreshGroups, refreshUser }),
+    [user, catalog, groups, loading, signIn, signOut, refreshGroups, refreshUser],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

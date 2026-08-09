@@ -16,6 +16,7 @@ import { Scheduling } from './pages/Scheduling';
 import { MyShifts } from './pages/MyShifts';
 import { Admin } from './pages/Admin';
 import { Reports } from './pages/Reports';
+import { ChangePassword } from './pages/ChangePassword';
 
 /**
  * Six tabs, matching how the work actually divides up: clocking, time and
@@ -60,6 +61,11 @@ export function App() {
 
   if (!user) return <Login />;
 
+  // Ahead of the whole shell rather than as a route, because the account is
+  // refused every other endpoint until this is done — a chrome with six tabs
+  // that all fail is worse than no chrome at all.
+  if (user.mustChangePassword) return <ChangePassword forced />;
+
   const tabs = TABS.filter((t) => !t.supervisorOnly || user.isSupervisor);
 
   return (
@@ -100,13 +106,13 @@ export function App() {
         >
           ?
         </button>
-        <div className="who">
+        <NavLink className="who" to="/account/password" title="Change your password">
           <div className="who-name">{user.name}</div>
           <div className="who-role">
             {user.roleLabel} · {user.employeeId}
             {user.projectId ? ` · ${user.projectId}` : ''}
           </div>
-        </div>
+        </NavLink>
         <button className="btn btn-ghost" onClick={signOut}>
           Sign out
         </button>
@@ -147,6 +153,7 @@ export function App() {
           <Route path="/absence/*" element={<Navigate to="/my" replace />} />
           <Route path="/admin/*" element={user.isSupervisor ? <Admin /> : <Navigate to="/dashboard" />} />
           <Route path="/reports/*" element={<Reports />} />
+          <Route path="/account/password" element={<ChangePassword />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>

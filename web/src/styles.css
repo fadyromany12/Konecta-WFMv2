@@ -4700,3 +4700,95 @@ main {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ------------------------------------------------ directory and passwords */
+
+/* The forced password screen is the whole page, with no application chrome
+   behind it, so it reuses the sign-in shell rather than painting its own
+   ground — the aurora is already there and a solid fill would cover it. */
+.gate { max-width: 30rem; }
+.gate-title {
+  margin: 0 0 0.9rem;
+  font-size: var(--step-1);
+  text-align: center;
+}
+.gate .stack label > span {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+/* Shown once, read aloud, written down. Sized and spaced to be transcribed
+   correctly the first time — this is the one string in the product where a
+   misread character costs somebody their first morning. */
+.issued-password {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--step-2);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  padding: 0.9rem 1.1rem;
+  margin: 0.4rem 0 0.6rem;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+.issued-for { margin-bottom: 0; color: var(--muted); }
+
+.problem-list {
+  margin: 0 0 1rem;
+  padding-left: 1.1rem;
+  color: var(--bad);
+  font-size: var(--step--1);
+}
+.problem-list li { margin-block: 0.2rem; }
+
+.field-error {
+  color: var(--bad);
+  font-size: var(--step--1);
+  margin: -0.35rem 0 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.9rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.form-grid label,
+.stack label {
+  display: grid;
+  gap: 0.3rem;
+}
+.form-grid label > span,
+.stack label > span {
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.stack { display: grid; gap: 0.9rem; }
+
+.search-field {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+/* A leaver stays in the list rather than vanishing — somebody looking for
+   them needs to find out they have gone, not fail to find them. */
+.row-gone { opacity: 0.55; }
+.person-name { font-weight: 600; }
+.small { font-size: var(--step--1); }
+.tabular { font-variant-numeric: tabular-nums; }
+
+.rule {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.4rem 0 1rem;
+}
+
+/* The identity block became a link to the password screen; it should not
+   suddenly look like body copy with an underline. */
+a.who { text-decoration: none; color: inherit; display: block; }
+a.who:hover .who-name { color: var(--accent); }
