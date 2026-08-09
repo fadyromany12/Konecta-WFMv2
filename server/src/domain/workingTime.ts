@@ -108,8 +108,20 @@ export function checkWorkingTime(params: {
   limits?: WorkingTimeLimits;
   /** Only report breaches attributed to these days. */
   focus?: DateStr[];
+  /**
+   * The normal working day for a given date, when it is not the usual one.
+   *
+   * Ramadan is a six hour day in Egypt, so overtime starts two hours earlier
+   * and an ordinary eight hour shift is two hours over. The pay engine already
+   * knew this; the scheduler did not, so it would build eight hour shifts
+   * through the month and every one of them was silently a breach nobody was
+   * told about. Passed as a function rather than a set of dates because the
+   * caller already has the Ramadan calendar and this stays a pure rule.
+   */
+  normHoursOn?: (date: DateStr) => number;
 }): WorkingTimeBreach[] {
   const limits = params.limits ?? DEFAULT_LIMITS;
+  const normHoursOn = params.normHoursOn ?? (() => limits.maxDailyHours);
   const focus = params.focus ? new Set(params.focus) : null;
   const breaches: WorkingTimeBreach[] = [];
 
@@ -228,8 +240,16 @@ export function checkWorkingTime(params: {
       const worked = workingRuns(shift);
       const total = worked.reduce((sum, run) => sum + run, 0);
 
-      if (total > limits.maxDailyHours * 60) {
-        const over = Math.round((total / 60 - limits.maxDailyHours) * 10) / 10;
+      const norm = normHoursOn(day.date);
+      const shortDay = norm < limits.maxDailyHours;
+
+      if (total > norm * 60) {
+        const over = Math.round((total / 60 - norm) * 10) / 10;
+        // A shorter day is stated as such, because "2 hours past the 8 hour
+        // day" on a Ramadan shift is a message that reads as a bug.
+        const dayNote = shortDay
+          ? `${norm} hour Ramadan day`
+          : `${limits.maxDailyHours} hour day`;
         breaches.push({
           kind: over > limits.overtimeNoteHours ? 'overtime' : 'daily',
           date: day.date,
@@ -237,9 +257,9 @@ export function checkWorkingTime(params: {
           message:
             over > limits.overtimeNoteHours
               ? `${formatHours(total)} worked on ${day.date} — ${over} hours past the ` +
-                `${limits.maxDailyHours} hour day, and beyond the ${limits.overtimeNoteHours} hours ` +
+                `${dayNote}, and beyond the ${limits.overtimeNoteHours} hours ` +
                 'overtime the law contemplates. Allowed by policy; recorded here because it is unusual.'
-              : `${formatHours(total)} worked on ${day.date}, past the ${limits.maxDailyHours} hour day.`,
+              : `${formatHours(total)} worked on ${day.date}, past the ${dayNote}.`,
         });
       }
 

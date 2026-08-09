@@ -16,6 +16,7 @@ import {
 import {
   addDays,
   diffDays,
+  diffMinutes,
   nowStamp,
   resolveAfter,
   timeOf,
@@ -31,6 +32,9 @@ import {
   type RosterDay,
   type WorkingTimeBreach,
 } from '../domain/workingTime.js';
+import { normHoursOn } from '../domain/pay.js';
+import { ramadanDates } from '../domain/holidays.js';
+import { CAIRO, iftarWarning, prayerCoverage, type BreakWindow } from '../domain/prayer.js';
 
 interface ScheduleRecord {
   id: number;
@@ -250,6 +254,10 @@ export async function teamWeek(params: {
   // Monday would report a clean week that is anything but.
   const padded: DateStr[] = [];
   for (let d = addDays(start, -7); d <= addDays(end, 7); d = addDays(d, 1)) padded.push(d);
+  // Read once for the whole grid rather than once per person: a week of
+  // fifty-five advisors would otherwise do the Hijri conversion fifty-five
+  // times for the same fortnight.
+  const weekRamadan = ramadanAcross(padded);
 
   const ids = users.map((u) => u.id);
   // Drafts included: this is the screen they are built on, and a planner who
@@ -276,6 +284,7 @@ export async function teamWeek(params: {
         shifts: shiftsByKey.get(`${user.id}|${date}`) ?? [],
       })),
       focus: dates,
+      normHoursOn: (date) => normHoursOn(date, weekRamadan),
     });
     if (breaches.length > 0) breaching++;
 
@@ -484,6 +493,88 @@ export interface SaveResult {
   ok: boolean;
   issues: Issue[];
   shifts: ScheduleShift[];
+}
+
+/**
+ * Ramadan dates covering a set of dates.
+ *
+ * Generated per year and cached for the process, because the Hijri conversion
+ * is not free and a week grid asks for it once per person otherwise.
+ */
+const ramadanByYear = new Map<number, Set<string>>();
+
+export function ramadanAcross(dates: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const year of new Set(dates.map((d) => Number(d.slice(0, 4))))) {
+    let cached = ramadanByYear.get(year);
+    if (!cached) {
+      cached = ramadanDates(year);
+      ramadanByYear.set(year, cached);
+    }
+    for (const date of cached) out.add(date);
+  }
+  return out;
+}
+
+/**
+ * Whether the breaks in a shift leave room for the prayers inside it.
+ *
+ * Advisory, never a refusal. Prayer is an accommodation a floor makes rather
+ * than a statutory limit like the eleven hour rest, and there are genuinely
+ * days when the queue wins — blocking a save would mean planners route around
+ * the tool. Showing them what they are about to do means they can decide.
+ *
+ * Only iftar during Ramadan is raised as a warning rather than a note. An
+ * advisor on shift at sunset in Ramadan has not eaten or drunk since dawn.
+ */
+function prayerIssues(
+  window: { date: string; shifts: ScheduleShift[] }[],
+  focus: readonly string[],
+  ramadan: ReadonlySet<string>,
+): Issue[] {
+  const wanted = new Set(focus);
+  const issues: Issue[] = [];
+
+  for (const day of window) {
+    if (!wanted.has(day.date)) continue;
+    for (const shift of day.shifts) {
+      const span = shiftSpan(shift);
+      const breaks: BreakWindow[] = [];
+      for (const [i, row] of shift.rows.entries()) {
+        if (row.activityKey !== 'BREAK' && row.activityKey !== 'LUNCH') continue;
+        const next = shift.rows[i + 1];
+        const endsAt = next ? next.startAt : shift.endAt;
+        breaks.push({
+          startTime: row.startAt.slice(11, 16),
+          minutes: Math.max(0, diffMinutes(row.startAt, endsAt)),
+        });
+      }
+
+      const coverage = prayerCoverage({
+        date: day.date,
+        shiftStart: span.startAt.slice(11, 16),
+        shiftEnd: span.endAt.slice(11, 16),
+        breaks,
+        site: CAIRO,
+      });
+
+      const warning = iftarWarning(coverage, ramadan.has(day.date));
+      if (warning) {
+        issues.push({ level: ramadan.has(day.date) ? 'warning' : 'warning', message: warning });
+      }
+
+      const uncovered = coverage.filter((c) => !c.covered && c.prayer !== 'MAGHRIB');
+      if (uncovered.length > 0) {
+        issues.push({
+          level: 'warning',
+          message:
+            `${uncovered.map((c) => `${c.prayer.charAt(0) + c.prayer.slice(1).toLowerCase()} at ${c.at}`).join(' and ')} ` +
+            `${uncovered.length === 1 ? 'falls' : 'fall'} in this shift on ${day.date} with no break within twenty minutes.`,
+        });
+      }
+    }
+  }
+  return issues;
 }
 
 export async function saveShifts(params: {
@@ -809,6 +900,18 @@ export async function contextIssues(params: {
     });
   }
 
-  const breaches = checkWorkingTime({ days: window, focus: dates });
-  return { issues: [...issues, ...workingTimeIssues(breaches)], breaches };
+  // Ramadan is a six hour day, so an ordinary eight hour shift built through
+  // the month is two hours over before anybody has done anything unusual. The
+  // pay engine knew that already; until now the scheduler did not, and would
+  // happily build a month of shifts that every one of them breached.
+  const ramadan = ramadanAcross(dates);
+  const breaches = checkWorkingTime({
+    days: window,
+    focus: dates,
+    normHoursOn: (date) => normHoursOn(date, ramadan),
+  });
+  return {
+    issues: [...issues, ...workingTimeIssues(breaches), ...prayerIssues(window, dates, ramadan)],
+    breaches,
+  };
 }

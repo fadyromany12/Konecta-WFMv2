@@ -22,6 +22,9 @@ import { intradaySnapshot } from '../services/intraday.js';
 import { accuracyFor, getActuals, saveActuals } from '../services/accuracy.js';
 import { absenceProfiles } from '../services/absencePatterns.js';
 import { rebalanceFor } from '../services/rebalance.js';
+import { ramadanAcross } from '../services/scheduling.js';
+import { PRAYER_LABELS, PRAYER_GRACE_MINUTES, prayerTimes } from '../domain/prayer.js';
+import { normHoursOn } from '../domain/pay.js';
 import { TRIGGERS } from '../domain/bradford.js';
 import {
   autoSchedule,
@@ -127,6 +130,28 @@ planning.get(
       getForecast(projectId, date),
     ]);
     res.json({ ...result, projectId, forecast });
+  }),
+);
+
+// ------------------------------------------------- prayer times and Ramadan
+//
+// Exposed so a planner can see where the day's fixed points are before
+// building breaks around them, rather than finding out from a warning after
+// they have saved.
+
+planning.get(
+  '/prayer-times',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const ramadan = ramadanAcross([date]);
+    res.json({
+      ...prayerTimes(date),
+      labels: PRAYER_LABELS,
+      isRamadan: ramadan.has(date),
+      normHours: normHoursOn(date, ramadan),
+      graceMinutes: PRAYER_GRACE_MINUTES,
+    });
   }),
 );
 

@@ -732,6 +732,42 @@ const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${Y
 check('no Ramadan date is also a public holiday',
   ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
 
+console.log('=== PRAYER TIMES AND RAMADAN ===');
+const pray = (await call('GET',`/prayer-times?date=${YEAR}-06-21`,ADV)).body;
+check('prayer times are computed for a date', Array.isArray(pray?.times) && pray.times.length === 6, JSON.stringify(pray)?.slice(0,120));
+const byName = Object.fromEntries((pray.times ?? []).map((t) => [t.name, t.at]));
+const asMins = (t) => Number(t.slice(0,2))*60 + Number(t.slice(3,5));
+check('they are in the order of the day',
+  ['FAJR','SUNRISE','DHUHR','ASR','MAGHRIB','ISHA'].every((n, i, a) =>
+    i === 0 || asMins(byName[a[i-1]]) < asMins(byName[n])));
+// Cairo sunset on the June solstice is about 19:57 on summer time. A result an
+// hour out would mean the daylight saving rule is wrong, which is the mistake
+// that matters -- it would put every iftar warning in the wrong place for half
+// the year.
+check('midsummer Maghrib matches the published Cairo time',
+  Math.abs(asMins(byName.MAGHRIB) - asMins('19:57')) <= 5, byName.MAGHRIB);
+const winter = (await call('GET',`/prayer-times?date=${YEAR}-12-21`,ADV)).body;
+const wMaghrib = winter.times.find((t)=>t.name==='MAGHRIB').at;
+check('midwinter Maghrib matches too, on standard time',
+  Math.abs(asMins(wMaghrib) - asMins('16:58')) <= 5, wMaghrib);
+check('summer time moves the whole day by an hour',
+  asMins(byName.MAGHRIB) - asMins(wMaghrib) > 150);
+check('a normal day is eight hours', pray.normHours === 8);
+check('and it is not Ramadan in June this year', pray.isRamadan === false);
+
+// The scheduler must know Ramadan is a six hour day, or it builds a month of
+// eight hour shifts that every one of them breaches.
+const ramadanDatesList = (await call('GET',`/pay/ramadan?start=${YEAR}-01-01&end=${YEAR+1}-12-31`,ADV)).body?.dates ?? [];
+const aRamadanDay = ramadanDatesList.find((d) => d > day(30)) ?? ramadanDatesList[0];
+if (aRamadanDay) {
+  const inRamadan = (await call('GET',`/prayer-times?date=${aRamadanDay}`,ADV)).body;
+  check('a Ramadan date is reported as one', inRamadan.isRamadan === true, aRamadanDay);
+  check('and carries the six hour day', inRamadan.normHours === 6);
+} else check('a Ramadan date was found to test', false);
+
+check('an advisor can read prayer times', (await call('GET','/prayer-times',ADV)).status === 200);
+check('a malformed date is refused', (await call('GET','/prayer-times?date=June',ADV)).status === 400);
+
 console.log('=== INTRADAY THAT RECOMMENDS ===');
 const reb = (await call('GET',`/rebalance?date=${day(0)}`,OM)).body;
 check('rebalance answers for a day', Array.isArray(reb?.recommendations), JSON.stringify(reb)?.slice(0,140));
