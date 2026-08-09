@@ -87,6 +87,8 @@ function CommandCentre() {
   const [tick, setTick] = useState(0);
   /** Set briefly when a push arrives, so the change is visible as movement. */
   const [pulsed, setPulsed] = useState(false);
+  /** The board defaults to exceptions; the full roll-call is one click away. */
+  const [showEveryone, setShowEveryone] = useState(false);
 
   useEffect(() => {
     if (!group && groups.length > 0) {
@@ -163,6 +165,29 @@ function CommandCentre() {
 
   const totals = live.data?.totals;
   const onShift = live.data?.people.filter((p) => p.state !== 'OFF_SHIFT') ?? [];
+
+  /**
+   * The board, split into what needs looking at and what does not.
+   *
+   * It used to be one grid of everybody on shift. At twelve advisors that was
+   * a roll-call; at fifty it was thirty-four identical cards all reading "On
+   * phone · 4m", filling most of the screen to say that nothing is happening —
+   * with the two people who *were* a problem sitting somewhere inside it,
+   * distinguishable only by a coloured edge.
+   *
+   * An operations screen is read to find the exceptions. So the exceptions get
+   * the cards and everybody working normally collapses to a line of counts.
+   * The full list is still one click away, because sometimes you do want to
+   * find one particular person.
+   */
+  const NEEDS_LOOKING_AT = new Set(['LATE', 'NO_SHOW', 'NOT_CLOCKED_ON', 'CLOCKED_OFF_EARLY']);
+  const exceptions = onShift.filter((p) => NEEDS_LOOKING_AT.has(p.state) || p.outOfAdherence);
+  const steady = onShift.filter((p) => !exceptions.includes(p));
+  const outOfAdherence = onShift.filter((p) => p.outOfAdherence);
+  const steadyByState = steady.reduce<Record<string, number>>((acc, p) => {
+    acc[p.state] = (acc[p.state] ?? 0) + 1;
+    return acc;
+  }, {});
   const cov = coverage.data?.coverage ?? [];
   const daytime = cov.filter((c: any) => c.volume > 0);
 
@@ -221,10 +246,38 @@ function CommandCentre() {
         <Card
           title="Who is on right now"
           subtitle={`${onShift.length} on shift, ${(live.data?.people.length ?? 0) - onShift.length} off`}
+          actions={
+            <Button variant="ghost" onClick={() => setShowEveryone((v) => !v)}>
+              {showEveryone ? 'Just the exceptions' : `Show all ${onShift.length}`}
+            </Button>
+          }
         >
           {onShift.length === 0 && !live.loading && <Empty>Nobody is scheduled at this moment.</Empty>}
+
+          {/* The quiet majority, as counts rather than cards. */}
+          {!showEveryone && steady.length > 0 && (
+            <div className="steady-strip">
+              <strong className="num">{steady.length}</strong>
+              <span>working to plan</span>
+              <span className="steady-split">
+                {Object.entries(steadyByState)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([state, n]) => (
+                    <span key={state} className="steady-part">
+                      <span className={`steady-dot board-${state}`} />
+                      {n} {(STATE_LABELS[state] ?? state).toLowerCase()}
+                    </span>
+                  ))}
+              </span>
+            </div>
+          )}
+
+          {!showEveryone && exceptions.length === 0 && onShift.length > 0 && (
+            <Empty>Everybody on shift is doing what the plan says. Nothing to chase.</Empty>
+          )}
+
           <div className="board">
-            {onShift.map((person, i) => (
+            {(showEveryone ? onShift : exceptions).map((person, i) => (
               <div
                 key={person.userId}
                 style={{ '--i': Math.min(i, 24) } as React.CSSProperties}
@@ -289,14 +342,55 @@ function CommandCentre() {
             </ul>
           </Card>
 
+          {/*
+            The ring used to sit alone in the middle of a large card, showing
+            the same 91% the KPI strip already showed a few inches above it — a
+            quarter of the screen spent saying something twice.
+
+            A percentage on its own is not actionable anyway: nobody can do
+            anything about 91. What a supervisor does next is talk to the people
+            making up the other 9, so the ring now sits beside them.
+          */}
           {totals && (
             <Card title="Adherence right now" tone="quiet">
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <div className="adherence-split">
                 <Gauge
                   value={totals.adherencePct}
                   label="In adherence"
                   tone={totals.adherencePct >= 90 ? 'good' : totals.adherencePct >= 80 ? 'warn' : 'error'}
                 />
+                <div className="adherence-who">
+                  {outOfAdherence.length === 0 ? (
+                    <p className="muted">
+                      Everybody on shift is doing what the plan says for this moment.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="adherence-who-head">
+                        Doing something other than the plan
+                      </div>
+                      <ul className="adherence-list">
+                        {outOfAdherence.slice(0, 6).map((person) => (
+                          <li key={person.userId}>
+                            <button
+                              className="linklike"
+                              onClick={() => navigate(`/time/card/${person.userId}/${today()}`)}
+                            >
+                              {person.name}
+                            </button>
+                            <span className="muted">
+                              {STATE_LABELS[person.state] ?? person.state}
+                              {person.scheduledActivity ? ` · planned ${person.scheduledActivity}` : ''}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                      {outOfAdherence.length > 6 && (
+                        <p className="muted">and {outOfAdherence.length - 6} more</p>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
             </Card>
           )}

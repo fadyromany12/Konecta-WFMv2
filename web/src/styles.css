@@ -26,17 +26,54 @@
   --k-ink: #0f0f0f;
   --k-mist: #f2f3f7;
 
-  /* Semantic */
+  /* Semantic
+   *
+   * Kept deliberately clear of the accent. The accent says "you can act on
+   * this"; these say "this is fine / this needs a look / this is wrong". When
+   * the two share a hue a screen full of healthy figures looks like a screen
+   * full of buttons, and the eye stops trusting either.
+   *
+   * The brand yellow is a display colour and stays one. As a warning tone at
+   * text size it is close to unreadable on light and glares on dark, so the
+   * semantic warn is pulled toward amber where it can actually be read at
+   * 0.8rem beside a number.
+   */
   --accent: var(--k-cyan);
   --accent-strong: var(--k-indigo-bright);
   --good: var(--k-teal);
-  --warn: var(--k-yellow);
+  --warn: #f2b134;
   --error: #ff5c7a;
 
-  /* Surfaces — glass */
-  --glass: rgba(255, 255, 255, 0.055);
-  --glass-strong: rgba(255, 255, 255, 0.09);
-  --glass-sunken: rgba(6, 6, 34, 0.34);
+  /* Elevation
+   *
+   * Three levels, and no more: the page, a panel on it, something raised above
+   * that. An operations screen is mostly panels, and once surfaces stop being
+   * countable the eye loses track of what sits on what.
+   */
+  --ground: #06070f;
+  --surface-1: #0d1020;
+  --surface-2: #151a33;
+
+  /* Type scale. A fourth-ish ratio, tightened at the display end so a large
+     number reads as one shape rather than a row of letters. */
+  --step--1: 0.78rem;
+  --step-0: 0.9rem;
+  --step-1: 1.05rem;
+  --step-2: 1.3rem;
+  --step-3: 1.75rem;
+  --step-4: 2.4rem;
+  --track-display: -0.02em;
+  --track-label: 0.08em;
+
+  /* Surfaces — glass
+   *
+   * Mixed toward a real surface colour rather than being pure white at low
+   * alpha. White-on-anything takes its hue from whatever is behind it, which
+   * is why the cards used to go purple wherever the wash was strongest: the
+   * elevation ladder was only ever as stable as the ground under it. */
+  --glass: color-mix(in srgb, var(--surface-1) 82%, white 6%);
+  --glass-strong: color-mix(in srgb, var(--surface-2) 88%, white 8%);
+  --glass-sunken: rgba(4, 5, 14, 0.5);
   --hairline: rgba(255, 255, 255, 0.11);
   --hairline-soft: rgba(255, 255, 255, 0.06);
   --sheen: rgba(255, 255, 255, 0.16);
@@ -128,12 +165,19 @@ body {
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
-  /* A base wash under the aurora, so the deep navy never reads as flat black. */
+  /* A base wash under the aurora, so the deep navy never reads as flat black.
+   *
+   * Pulled right down from where it started. Indigo at half opacity across the
+   * top-left corner was the loudest thing on any screen — it read as a poster
+   * rather than a control room, and it tinted the very cards that are supposed
+   * to sit *above* the ground, flattening the whole elevation scale. A hint of
+   * colour in the corners does the same job of keeping the ground off flat
+   * black without competing with anything on top of it. */
   background:
-    radial-gradient(1200px 800px at 12% -8%, rgba(42, 1, 205, 0.5), transparent 60%),
-    radial-gradient(1000px 700px at 92% 4%, rgba(0, 200, 255, 0.16), transparent 58%),
-    radial-gradient(900px 900px at 60% 110%, rgba(15, 15, 114, 0.7), transparent 62%),
-    #05061c;
+    radial-gradient(1400px 900px at 10% -12%, rgba(42, 1, 205, 0.16), transparent 62%),
+    radial-gradient(1100px 800px at 94% 2%, rgba(0, 200, 255, 0.05), transparent 58%),
+    radial-gradient(1000px 1000px at 58% 118%, rgba(15, 15, 114, 0.24), transparent 64%),
+    var(--ground);
   background-attachment: fixed;
 }
 
@@ -164,8 +208,12 @@ html[data-theme='light'] body {
   inset: -20vmax;
   z-index: 0;
   pointer-events: none;
-  filter: blur(76px) saturate(180%);
-  opacity: 1;
+  filter: blur(90px) saturate(130%);
+  /* Ambience, not decoration. At full strength and 180% saturation this was
+     the brightest thing on a screen whose job is a wall of figures, and the
+     colour crept up into the cards. It stays because a completely inert ground
+     reads as cheap; it stays quiet because everything above it is the point. */
+  opacity: 0.42;
 }
 
 .aurora span {
@@ -1755,16 +1803,18 @@ html[data-theme='light'] .stamp-date {
 .kpi-label {
   font-size: 0.64rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: var(--track-label);
   color: var(--text-faint);
   font-weight: 640;
 }
 
 .kpi-value {
   font-family: var(--mono);
-  font-size: 1.75rem;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
+  font-size: var(--step-3);
+  letter-spacing: var(--track-display);
+  line-height: 1.1;
+  /* Figures line up between cards and stop shifting as they tick. Without
+     this a live count visibly jitters as 1s and 4s swap in. */
   font-variant-numeric: tabular-nums;
 }
 
@@ -4494,4 +4544,159 @@ main {
   margin-top: 0.7rem;
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+/* ------------------------------------------------------- the steady strip --
+ * Everybody who is doing exactly what the plan says, as one line.
+ *
+ * This replaces thirty-four identical cards. The count is the headline because
+ * "34 working to plan" is the entire message; the breakdown behind it is there
+ * for the glance that asks "and doing what?", at a weight that does not compete
+ * with the exceptions underneath.
+ */
+
+.steady-strip {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.7rem;
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-sm);
+  background: var(--glass-sunken);
+}
+
+.steady-strip > strong {
+  font-family: var(--mono);
+  font-size: var(--step-2);
+  letter-spacing: var(--track-display);
+  font-variant-numeric: tabular-nums;
+  color: var(--good);
+}
+
+.steady-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.85rem;
+  margin-inline-start: auto;
+  font-size: var(--step--1);
+  color: var(--text-dim);
+}
+
+.steady-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+/* Carries the same state colours the board cells use, so the dot in the strip
+   and the edge on a card mean the same thing without needing a legend.
+   Restated rather than inherited: the board classes paint a *left border*, and
+   reusing them on a round 8px dot would draw a sliver down one side of it. */
+.steady-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  border: 0;
+  opacity: 0.8;
+  flex: none;
+}
+
+.steady-dot.board-ON_PHONE { background: var(--good); }
+.steady-dot.board-OTHER_WORK { background: var(--k-periwinkle); }
+.steady-dot.board-BREAK,
+.steady-dot.board-LUNCH { background: var(--k-cyan); }
+.steady-dot.board-NOT_CLOCKED_ON { background: var(--text-faint); }
+.steady-dot.board-LATE,
+.steady-dot.board-CLOCKED_OFF_EARLY,
+.steady-dot.board-NO_SHOW { background: var(--error); }
+
+@media (max-width: 40rem) {
+  .steady-split {
+    margin-inline-start: 0;
+    width: 100%;
+  }
+}
+
+/* --------------------------------------------------- adherence, explained --
+ * A ring beside the people it is about. The number alone was already in the
+ * KPI strip, and a percentage is not something anybody can act on — the names
+ * are.
+ */
+
+.adherence-split {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1.2rem;
+}
+
+.adherence-who-head {
+  font-size: var(--step--1);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-faint);
+  font-weight: 640;
+  margin-bottom: 0.5rem;
+}
+
+.adherence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.adherence-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  font-size: var(--step-0);
+  line-height: 1.3;
+}
+
+.adherence-list .muted {
+  font-size: var(--step--1);
+}
+
+@media (max-width: 46rem) {
+  .adherence-split {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+}
+
+/* A name that behaves like a link but is a button, because it acts rather than
+   navigates to a document. Styled once here so every list of people in the app
+   opens the same way. */
+.linklike {
+  background: none;
+  border: 0;
+  font: inherit;
+  font-weight: 620;
+  color: var(--text);
+  text-align: start;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color var(--dur) var(--ease-soft);
+  /* A line of text is about nineteen pixels tall, which is a fine thing to
+     read and too small a thing to hit. The padding takes the touch target past
+     thirty-two; the negative margin gives the space back to the layout, so a
+     dense list stays dense and is still tappable. */
+  padding-block: 0.5rem;
+  margin-block: -0.5rem;
+}
+
+.linklike:hover {
+  color: var(--accent);
+}
+
+.linklike:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
