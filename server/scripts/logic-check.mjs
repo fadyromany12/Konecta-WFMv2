@@ -732,6 +732,132 @@ const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${Y
 check('no Ramadan date is also a public holiday',
   ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
 
+console.log('=== JOINERS, MOVERS, LEAVERS ===');
+// A unique suffix per run, so this can be run twice against the same database
+// without colliding on the employee ID or email unique constraints.
+const stamp = Date.now().toString(36).slice(-6);
+const joiner = {
+  employeeId: `TEST-${stamp}`,
+  name: 'Test Joiner',
+  email: `test.joiner.${stamp}@konecta.example`,
+  role: 'ADVISOR',
+  managerId: (await call('GET','/people',TL)).body.people.find((p)=>p.role==='TEAM_LEADER')?.id ?? null,
+  projectId: null,
+  departmentCode: '10000',
+  shiftRule: 'CR1',
+  hireDate: day(1),
+  region: 'EMEA',
+};
+
+check('a team leader cannot create a person', (await call('POST','/people',TL,joiner)).status === 403);
+check('an advisor cannot create a person', (await call('POST','/people',ADV,joiner)).status === 403);
+
+const created = await call('POST','/people',OM,joiner);
+check('an ops manager can create an advisor', created.status === 201, `status ${created.status} ${created.raw?.slice(0,120)}`);
+const newId = created.body?.id;
+check('creation returns a temporary password once', typeof created.body?.temporaryPassword === 'string' && created.body.temporaryPassword.length >= 12);
+check('the temporary password is dictatable', /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(created.body?.temporaryPassword ?? ''));
+
+check('a duplicate email is refused', (await call('POST','/people',OM,{...joiner, employeeId:`OTHER-${stamp}`})).status === 409);
+check('a duplicate employee id is refused', (await call('POST','/people',OM,{...joiner, email:`other.${stamp}@konecta.example`})).status === 409);
+const noManager = await call('POST','/people',OM,{...joiner, employeeId:`NM-${stamp}`, email:`nm.${stamp}@konecta.example`, managerId:null});
+check('an advisor with no manager is refused', noManager.status === 400);
+check('and says why, in words', (noManager.body?.problems ?? []).some((p)=>/manager/i.test(p)));
+check('an ops manager cannot mint an administrator',
+  (await call('POST','/people',OM,{...joiner, employeeId:`AD-${stamp}`, email:`ad.${stamp}@konecta.example`, role:'ADMIN'})).status === 403);
+
+// The new account can sign in and do nothing else until it chooses a password.
+const tempTok = (await call('POST','/auth/login',null,{email:joiner.email,password:created.body?.temporaryPassword})).body?.token;
+check('the new account can sign in', !!tempTok);
+check('but cannot reach anything else yet', (await call('GET','/clock',tempTok)).status === 403);
+check('and is told to change its password', (await call('GET','/clock',tempTok)).body?.mustChangePassword === true);
+check('it can still read its own identity', (await call('GET','/auth/me',tempTok)).status === 200);
+check('which reports the password must change', (await call('GET','/auth/me',tempTok)).body?.user?.mustChangePassword === true);
+
+check('a weak new password is refused',
+  (await call('POST','/auth/password',tempTok,{currentPassword:created.body?.temporaryPassword,newPassword:'short'})).status === 400);
+check('a wrong current password is refused',
+  (await call('POST','/auth/password',tempTok,{currentPassword:'NOPE-NOPE-NOPE',newPassword:'a good long phrase'})).status === 403);
+const changed = await call('POST','/auth/password',tempTok,{currentPassword:created.body?.temporaryPassword,newPassword:'a good long phrase'});
+check('a decent password is accepted', changed.status === 200, `status ${changed.status}`);
+check('and the account is released', (await call('GET','/clock',tempTok)).status === 200);
+check('the old temporary password no longer works',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:created.body?.temporaryPassword})).status === 401);
+check('the chosen one does',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 200);
+
+// Movers.
+const otherTL = (await call('GET','/people',OM)).body.people.find((p)=>p.role==='TEAM_LEADER' && p.id !== joiner.managerId);
+if (otherTL) {
+  check('an ops manager can move somebody to another team',
+    (await call('PATCH',`/people/${newId}`,OM,{managerId:otherTL.id})).status === 200);
+  check('the move shows in the directory',
+    (await call('GET','/people',OM)).body.people.find((p)=>p.id===newId)?.manager_id === otherTL.id);
+} else check('only one team leader, so the move check is skipped', true);
+check('a reporting loop is refused',
+  (await call('PATCH',`/people/${newId}`,OM,{managerId:newId})).status === 400);
+check('nobody can change their own role',
+  (await call('PATCH',`/people/${(await call('GET','/auth/me',OM)).body.user.id}`,OM,{role:'ADMIN'})).status === 403);
+check('an ops manager cannot promote anybody to administrator',
+  (await call('PATCH',`/people/${newId}`,OM,{role:'ADMIN'})).status === 403);
+
+// Leavers. The last working day is still a working day.
+const lastDay = day(0);
+const left = await call('POST',`/people/${newId}/leave`,OM,{leaveDate:lastDay});
+check('a leaving date can be recorded', left.status === 200, `status ${left.status}`);
+check('the leaver still has access on their last day',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 200);
+const yesterdayLeaver = await call('POST',`/people/${newId}/leave`,OM,{leaveDate:day(-1)});
+check('a leaving date in the past can be recorded', yesterdayLeaver.status === 200);
+check('and access stops the morning after',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 403);
+check('an existing token stops working too',
+  (await call('GET','/clock',tempTok)).status === 403);
+check('the directory reports them as left',
+  (await call('GET','/people',OM)).body.people.find((p)=>p.id===newId)?.effective_status === 'TERMINATED');
+
+check('reinstating restores access', (await call('POST',`/people/${newId}/reinstate`,OM)).status === 200);
+check('and they can sign in again',
+  (await call('POST','/auth/login',null,{email:joiner.email,password:'a good long phrase'})).status === 200);
+
+// A leaver with people still under them would take a whole team out of view,
+// so offboarding is refused until they are moved. Found by looking for a
+// manager somebody actually reports to rather than assuming a role has reports.
+const directory = (await call('GET','/people',OM)).body.people;
+const managerIds = new Set(directory.map((p) => p.manager_id).filter(Boolean));
+const withReports = directory.find((p) => managerIds.has(p.id) && p.role !== 'ADMIN');
+if (withReports) {
+  const blocked = await call('POST',`/people/${withReports.id}/leave`,ADM,{leaveDate:day(30)});
+  check('a manager with reports cannot be offboarded until they are moved',
+    blocked.status === 409, `status ${blocked.status}`);
+  check('and it names the people who would be stranded',
+    Array.isArray(blocked.body?.problems) && blocked.body.problems.length > 0);
+} else check('no manager with reports found, so the stranding check is skipped', true);
+
+// Password reset by an administrator.
+const reset = await call('POST',`/people/${newId}/reset-password`,OM);
+check('an ops manager can reset a password', reset.status === 200);
+check('which returns a new temporary password', /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(reset.body?.temporaryPassword ?? ''));
+check('the reset account is locked to the password screen again',
+  (await call('GET','/clock',(await call('POST','/auth/login',null,{email:joiner.email,password:reset.body?.temporaryPassword})).body?.token)).status === 403);
+check('an advisor cannot reset somebody else\'s password',
+  (await call('POST',`/people/${newId}/reset-password`,ADV)).status === 403);
+
+// Lockout. Five wrong guesses in a row buys a delay, not a locked door.
+const lockEmail = `lock.${stamp}@konecta.example`;
+const lockable = await call('POST','/people',OM,{...joiner, employeeId:`LK-${stamp}`, email:lockEmail});
+if (lockable.status === 201) {
+  for (let i = 0; i < 5; i++) await call('POST','/auth/login',null,{email:lockEmail,password:'definitely-wrong'});
+  const locked = await call('POST','/auth/login',null,{email:lockEmail,password:lockable.body.temporaryPassword});
+  check('five wrong guesses locks the account briefly', locked.status === 429, `status ${locked.status}`);
+  check('and says how long to wait', /minute/.test(locked.body?.error ?? ''));
+  check('the lock is a delay, not a door', /try again/i.test(locked.body?.error ?? ''));
+} else check('lockout account could not be created, check skipped', false, `status ${lockable.status}`);
+
+check('a wrong password and an unknown address are indistinguishable',
+  (await call('POST','/auth/login',null,{email:'admin@konecta.example',password:'wrong'})).body?.error ===
+  (await call('POST','/auth/login',null,{email:`ghost.${stamp}@nowhere.example`,password:'wrong'})).body?.error);
+
 console.log('=== SPA ROUTING ===');
 for (const p of ['/dashboard','/admin/audit','/reports/query','/my']) {
   const res = await fetch(ORIGIN + p, { headers: { accept: 'text/html' } });

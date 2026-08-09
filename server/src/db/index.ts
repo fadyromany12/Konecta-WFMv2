@@ -117,6 +117,19 @@ async function migrate(): Promise<void> {
   // How a worked public holiday was settled. Null means nobody has chosen yet,
   // which is a state the payroll screen has to be able to show.
   await addColumn('timecards', 'holiday_election', 'TEXT');
+  // A leaver's last working day. Access ends the morning after it rather than
+  // the moment somebody records the resignation, so the notice period is still
+  // workable. See domain/org.ts.
+  await addColumn('users', 'leave_date', 'TEXT');
+  // Set on every account the system issues a password for. Existing rows
+  // default to 0: they were seeded with a known password, and forcing the
+  // demo cast through a change on the next sign-in would break every scripted
+  // walkthrough. New accounts are created with it set.
+  await addColumn('users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('users', 'password_changed_at', 'TEXT');
+  // Failed sign-ins since the last success, and the instant a lockout lifts.
+  await addColumn('users', 'failed_logins', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('users', 'locked_until', 'TEXT');
 }
 
 async function addColumn(table: string, column: string, type: string): Promise<void> {

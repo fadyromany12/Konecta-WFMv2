@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS users (
   shift_rule      TEXT NOT NULL DEFAULT 'CR1',
   region          TEXT NOT NULL DEFAULT 'EMEA',
   hire_date       TEXT,
+  -- Last working day for a leaver, inclusive. Kept separate from status so a
+  -- notice period stays workable: the row says ACTIVE until the day after.
+  leave_date      TEXT,
+  -- A password the system issued rather than the person chose. Such an account
+  -- can sign in and do nothing else until it is changed.
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  password_changed_at  TEXT,
+  failed_logins        INTEGER NOT NULL DEFAULT 0,
+  locked_until         TEXT,
   created_at      TEXT NOT NULL DEFAULT {{NOW}}
 );
 CREATE INDEX IF NOT EXISTS idx_users_manager ON users(manager_id);
