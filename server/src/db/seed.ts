@@ -298,6 +298,73 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
     );
   }
 
+  /**
+   * The rest of the floor.
+   *
+   * Twelve advisors is enough to show every rule and far too few to show what
+   * the screens are like to *use*: a Team Week grid of twelve fits on one
+   * screen, a coverage chart of twelve is all noise and no shape, and a payroll
+   * summary of twelve never needs a filter. Two more team leaders with a dozen
+   * each puts it at a floor size somebody would recognise.
+   *
+   * The default differs by where it runs, because the constraint does.
+   *
+   * A serverless cold start has thirty seconds for the whole seed, and every
+   * advisor is another week of actuals and a month of roster. Production's own
+   * timeout gave the exchange rate: 7,403 statements bought thirty seconds, so
+   * roughly four milliseconds each. Twelve here keeps a fresh deployment at
+   * about the size that already succeeded, with twice the advisors in it.
+   *
+   * Nothing anywhere else is under that clock, so a machine with a real
+   * database gets a floor worth looking at. `PULSE_SEED_FLOOR` overrides both.
+   */
+  const FLOOR_SIZE = Math.max(
+    0,
+    Number(process.env.PULSE_SEED_FLOOR ?? (process.env.VERCEL ? 12 : 36)),
+  );
+  const FIRST_NAMES = [
+    'Ahmed', 'Mona', 'Youssef', 'Heba', 'Khaled', 'Aya', 'Mahmoud', 'Nada',
+    'Tarek', 'Rana', 'Sherif', 'Menna', 'Hany', 'Doaa', 'Wael', 'Asmaa',
+    'Ashraf', 'Reem', 'Emad', 'Shaimaa', 'Fady', 'Ghada', 'Sameh', 'Marwa',
+  ];
+  const LAST_NAMES = [
+    'Abdelrahman', 'Selim', 'Farag', 'Kamal', 'Sobhy', 'Ezzat', 'Nasser', 'Halim',
+    'Mansour', 'Rashad', 'Sabry', 'Zaghloul',
+  ];
+
+  const floorLeads: number[] = [];
+  const floorAdvisors: number[] = [];
+  if (FLOOR_SIZE > 0) {
+    const perTeam = 12;
+    for (let team = 0; team < Math.ceil(FLOOR_SIZE / perTeam); team++) {
+      const leadName = ['Ola Mokhtar', 'Bassem Riad', 'Injy Sherif', 'Hatem Zaki'][team % 4];
+      floorLeads.push(
+        await addUser({
+          employee_id: `TL000${310 + team}`,
+          name: `${leadName}${team > 3 ? ` ${team}` : ''}`,
+          email: emailFor(`${leadName} ${team}`),
+          role: 'TEAM_LEADER',
+          manager_id: omId,
+          project_id: team % 2 === 0 ? 'A123' : 'B900',
+        }),
+      );
+    }
+    for (let i = 0; i < FLOOR_SIZE; i++) {
+      const name = `${FIRST_NAMES[i % FIRST_NAMES.length]} ${LAST_NAMES[Math.floor(i / FIRST_NAMES.length) % LAST_NAMES.length]}`;
+      floorAdvisors.push(
+        await addUser({
+          employee_id: `AD000${1401 + i}`,
+          name,
+          email: emailFor(`${name} ${i}`),
+          role: 'ADVISOR',
+          manager_id: floorLeads[Math.floor(i / perTeam)],
+          project_id: (Math.floor(i / perTeam)) % 2 === 0 ? 'A123' : 'B900',
+          shift_rule: ['CR1', 'CR2', 'CR3'][i % 3],
+        }),
+      );
+    }
+  }
+
   const newHires: number[] = [];
   for (const [i, name] of ['Salma Reda', 'Tamer Wael'].entries()) {
     newHires.push(
@@ -338,6 +405,15 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   await ruleChange(dayAdvisors[0], 'CR3', addDays(today, 21), tlDayId);
 
   const FROM = -14;
+  /**
+   * How far back the wider floor carries punches and timecards.
+   *
+   * The core cast keeps the full window because the training scenarios live in
+   * it. Everybody else gets a week, which is what the live screens read, and
+   * which is the difference between a seed that fits inside a serverless
+   * function's thirty seconds and one that does not.
+   */
+  const ACTUALS_FROM = -7;
   // Schedules are published two days ahead; the forecast runs a week out. The
   // gap between them is deliberate — it is what the planner fills, and what
   // gives auto-scheduling something to actually do.
@@ -352,7 +428,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   // as one that always does — and before this, all sixteen were in breach.
   const overworked = new Set([nightAdvisors[0], dayAdvisors[0]]);
 
-  const allAdvisors = [...nightAdvisors, ...dayAdvisors];
+  const allAdvisors = [...nightAdvisors, ...dayAdvisors, ...floorAdvisors];
 
   /**
    * The two days off in every seven — a fixed rota line per person.
@@ -386,10 +462,14 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
     // seed that empties the roster on Friday and Saturday means the live board
     // is blank for two days in seven, which reads as a broken screen rather
     // than a quiet one. The weekend line below is what keeps it staffed.
-    for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
+    for (const userId of [...nightAdvisors, ...dayAdvisors, ...floorAdvisors, ...newHires]) {
       const night = nightAdvisors.includes(userId);
       const isNewHire = newHires.includes(userId);
       if (isNewHire && offset < -9) continue;
+      // Past roster earns its keep by being something the timecards can be
+      // compared against. The wider floor has no timecards that far back, so a
+      // schedule there would be a plan nobody worked and nobody checked.
+      if (offset < ACTUALS_FROM && floorAdvisors.includes(userId)) continue;
       // New hires get the same two days off as anybody else. Exempting them
       // put a class of trainees on seven day weeks, which is both illegal and
       // the last thing you would do to somebody in their first fortnight.
@@ -432,6 +512,10 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
       });
 
       if (offset > 0) continue; // nothing has been punched in the future
+      // See the note by the timecard loop: the wider floor carries a week of
+      // actuals rather than three, because what they exist for is making the
+      // live screens look like a real floor.
+      if (offset < ACTUALS_FROM && floorAdvisors.includes(userId)) continue;
 
       // Today's punches are emitted only up to the current moment, so a shift
       // that is part way through looks part way through rather than abandoned.
@@ -450,7 +534,14 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   // ---------------------------------------------- generate the resulting cards
   for (let offset = FROM; offset <= 0; offset++) {
     const date = addDays(today, offset);
-    for (const userId of [...nightAdvisors, ...dayAdvisors, ...newHires]) {
+    for (const userId of [...nightAdvisors, ...dayAdvisors, ...floorAdvisors, ...newHires]) {
+      // The wider floor exists to make the live screens look like a real floor
+      // — Team Week, coverage, today's payroll. None of that needs three weeks
+      // of history per person, and generating it is what pushed the seed back
+      // over a serverless function's thirty seconds. They get a week; the core
+      // cast, whose weeks the training scenarios are built around, gets all of
+      // it.
+      if (offset < ACTUALS_FROM && floorAdvisors.includes(userId)) continue;
       await generateTimecard({ userId, date, actorId: adminId, now: nowStamp() });
     }
   }
@@ -478,7 +569,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
 
   // ------------------------------------------------------------------ accruals
   const ACCRUAL_SQL = 'INSERT INTO accruals (user_id, accrual_type, balance_hours, as_of) VALUES (?, ?, ?, ?)';
-  for (const [i, userId] of [...nightAdvisors, ...dayAdvisors, ...newHires].entries()) {
+  for (const [i, userId] of [...nightAdvisors, ...dayAdvisors, ...floorAdvisors, ...newHires].entries()) {
     await db.run(ACCRUAL_SQL, [userId, 'VACATION', 40 + i * 3.5, today]);
     await db.run(ACCRUAL_SQL, [userId, 'SICK', 16 + (i % 4) * 4, today]);
   }
