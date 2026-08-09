@@ -1,3 +1,4 @@
+import { endpointKind, type EndpointKind } from './diagnose.js';
 import { schemaFor } from './schema.js';
 import { createSqliteDatabase } from './sqlite.js';
 import { createPostgresDatabase } from './postgres.js';
@@ -48,9 +49,33 @@ const sqliteFile =
 export const USING_POSTGRES = postgresUrl !== null;
 export const IS_MEMORY = !USING_POSTGRES && sqliteFile === ':memory:';
 
+// Running on ephemeral memory is a legitimate choice for a demo and a silent
+// disaster for anything else: every cold start reseeds, so a record written a
+// minute ago may simply not exist. It looks healthy from the outside — the
+// deployment answers 200 and the data is plausible — which is exactly why it
+// needs saying out loud rather than being left to whoever reads /api/health.
+if (IS_MEMORY && process.env.VERCEL) {
+  console.warn(
+    'WARNING: no Postgres URL is set, so this deployment is running on an in-memory database. ' +
+      'Every cold start wipes it and instances do not share data. ' +
+      'Set POSTGRES_URL and redeploy — Vercel captures environment variables when a deployment is built, ' +
+      'so adding the variable alone will not change a deployment that is already live.',
+  );
+}
+
 export const db: Database = USING_POSTGRES
   ? createPostgresDatabase(postgresUrl!)
   : createSqliteDatabase(sqliteFile);
+
+/**
+ * What kind of endpoint we were pointed at, for the failure diagnosis.
+ *
+ * Computed here because this is the only module that knows the connection
+ * string, and deliberately reduced to a category rather than a hostname: a
+ * direct Supabase host carries the project reference, and this ends up in a
+ * response served before anybody has signed in.
+ */
+export const ENDPOINT_KIND: EndpointKind = endpointKind(postgresUrl);
 
 /** Human description of where the data is, for the health endpoint and logs. */
 export function storageDescription(): string {
@@ -89,6 +114,9 @@ async function migrate(): Promise<void> {
   // Existing rows were being worked to, so they are published by definition.
   await addColumn('schedules', 'status', "TEXT NOT NULL DEFAULT 'PUBLISHED'");
   await addColumn('schedules', 'published_at', 'TEXT');
+  // How a worked public holiday was settled. Null means nobody has chosen yet,
+  // which is a state the payroll screen has to be able to show.
+  await addColumn('timecards', 'holiday_election', 'TEXT');
 }
 
 async function addColumn(table: string, column: string, type: string): Promise<void> {

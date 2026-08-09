@@ -16,6 +16,7 @@ import {
 } from '../domain/reference.js';
 import { buildAdherenceReport, punctuality } from '../domain/adherence.js';
 import { evaluateEdit } from '../domain/editWindow.js';
+import { assessApproval, assessRequest } from '../domain/leaveBalance.js';
 import { addDays, diffMinutes, nowStamp, todayStr } from '../domain/time.js';
 import {
   canManage,
@@ -42,6 +43,20 @@ import {
   saveShifts,
   teamWeek,
 } from '../services/scheduling.js';
+import { costTimecard, dayCharacter, type HolidayElection } from '../domain/pay.js';
+import {
+  holidayDates,
+  listHolidays,
+  settleHoliday,
+  upcomingHolidays,
+} from '../services/holidays.js';
+import {
+  EGYPT_RATES,
+  actualCost,
+  electHolidaySettlement,
+  plannedCost,
+  summariseCost,
+} from '../services/pay.js';
 import {
   generateTimecard,
   payrollSummary,
@@ -463,7 +478,25 @@ api.get(
       today: todayStr(),
       protectDate: view?.protectDate ?? null,
     });
-    res.json({ timecard: view, decision, shifts: await getShifts(userId, date) });
+    const shifts = await getShifts(userId, date, { includeDrafts: true });
+    const holidays = await holidayDates(date, date);
+    const character = dayCharacter({ date, holidays, scheduled: shifts.length > 0 });
+    res.json({
+      timecard: view,
+      decision,
+      shifts,
+      // The cost travels with the card because the settlement decision is taken
+      // here, reading this card, and a supervisor choosing between triple time
+      // and a banked day needs to see what each one comes to.
+      pay: view
+        ? costTimecard({
+            rows: view.rows,
+            dayCharacter: character,
+            election: view.holidayElection as HolidayElection | null,
+          })
+        : null,
+      holiday: (await listHolidays(date, date))[0] ?? null,
+    });
   }),
 );
 
@@ -568,6 +601,125 @@ api.get(
   }),
 );
 
+// -------------------------------------------------------------------- pay
+//
+// Cost is expressed in hours at the base rate throughout. No salary is held in
+// this system, and a paid-hours figure multiplies into money whenever somebody
+// who has the rates needs it to.
+
+api.get(
+  '/pay/rates',
+  authenticate,
+  asyncRoute(async (_req, res) => {
+    res.json({
+      rates: EGYPT_RATES,
+      basis:
+        'Overtime rates and the night window are Egyptian Labour Law No. 14 of 2025. ' +
+        'Rest day, public holiday and the day in lieu are Konecta policy. ' +
+        'Premiums do not stack: the character of the day sets the rate for every hour worked in it.',
+    });
+  }),
+);
+
+api.get(
+  '/pay/holidays',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 365));
+    res.json({ holidays: await listHolidays(start, end) });
+  }),
+);
+
+api.get(
+  '/pay/holidays/upcoming',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const days = Math.min(400, Math.max(1, Number(req.query.days ?? 90)));
+    res.json({ holidays: await upcomingHolidays(days) });
+  }),
+);
+
+/**
+ * Confirm an estimated holiday, or move it to the date that was announced.
+ *
+ * Restricted above supervisor: moving a public holiday changes what a whole
+ * region is paid for a day, which is not a team-level decision.
+ */
+api.post(
+  '/pay/holidays/:date/settle',
+  authenticate,
+  requireRole('OPS_MANAGER', 'ADMIN'),
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.params.date);
+    const body = z
+      .object({ actualDate: dateSchema.optional(), name: z.string().min(1).max(120).optional() })
+      .parse(req.body ?? {});
+    const result = await settleHoliday({ date, ...body, actorId: req.user!.id });
+    res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
+/** What a stretch of somebody's worked time cost. */
+api.get(
+  '/pay/cost/:userId',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const userId = Number(req.params.userId);
+    if (userId !== req.user!.id && !(await canManage(req.user!, userId))) {
+      throw new HttpError(403, 'You cannot see that.');
+    }
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? start);
+    const days = await actualCost({ userId, start, end, actorId: req.user!.id });
+    res.json({ days, total: summariseCost(days) });
+  }),
+);
+
+/** What a roster commits to, while there is still time to change it. */
+api.get(
+  '/pay/roster',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 6));
+    const group = typeof req.query.group === 'string' ? req.query.group : undefined;
+    const ids = await resolveGroup(req.user!, group);
+    const days = await plannedCost({
+      userIds: ids,
+      start,
+      end,
+      includeDrafts: req.query.drafts === 'true',
+    });
+    res.json({ days, total: summariseCost(days) });
+  }),
+);
+
+/**
+ * Settle a worked public holiday. The supervisor's decision, taken at approval.
+ */
+api.post(
+  '/pay/timecards/:id/holiday-election',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    const body = z.object({ election: z.enum(['PAY_3X', 'PAY_2X_PLUS_DAY']) }).parse(req.body);
+    const owner = await db.get<{ user_id: number }>('SELECT user_id FROM timecards WHERE id = ?', [id]);
+    if (!owner) throw new HttpError(404, 'No such timecard.');
+    if (!(await canManage(req.user!, owner.user_id))) {
+      throw new HttpError(403, 'You cannot settle that timecard.');
+    }
+    const result = await electHolidaySettlement({
+      timecardId: id,
+      election: body.election,
+      actorId: req.user!.id,
+    });
+    res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
 api.get(
   '/payroll/periods',
   authenticate,
@@ -646,22 +798,36 @@ api.post(
       })
       .parse(req.body);
 
-    if (body.endDate < body.startDate) throw new HttpError(400, 'The end date is before the start date.');
-
-    // Accrual enforcement: a request cannot exceed what has actually accrued.
-    if (body.accrualType !== 'UNPAID') {
-      const balance = await db.get<{ balance_hours: number }>(
+    // Judged against the balance *and* everything already on file. Checking
+    // only the balance is correct exactly once: ask twice and both pass,
+    // because neither request knows about the other.
+    const [balance, claims] = await Promise.all([
+      db.get<{ balance_hours: number }>(
         'SELECT balance_hours FROM accruals WHERE user_id = ? AND accrual_type = ?',
         [req.user!.id, body.accrualType],
-      );
-      const available = balance?.balance_hours ?? 0;
-      if (body.hours > available) {
-        throw new HttpError(
-          400,
-          `You have ${available} hours of ${body.accrualType.toLowerCase()} accrued and asked for ${body.hours}.`,
-        );
-      }
-    }
+      ),
+      db.all<{ start_date: string; end_date: string; accrual_type: string; hours: number; status: string }>(
+        `SELECT start_date, end_date, accrual_type, hours, status FROM time_off_requests
+         WHERE user_id = ? AND status IN ('PENDING', 'APPROVED')`,
+        [req.user!.id],
+      ),
+    ]);
+
+    const verdict = assessRequest({
+      accrualType: body.accrualType,
+      startDate: body.startDate,
+      endDate: body.endDate,
+      hours: body.hours,
+      balanceHours: balance?.balance_hours ?? 0,
+      claims: claims.map((c) => ({
+        startDate: c.start_date as any,
+        endDate: c.end_date as any,
+        accrualType: c.accrual_type,
+        hours: c.hours,
+        status: c.status,
+      })),
+    });
+    if (!verdict.ok) throw new HttpError(400, verdict.reason!);
 
     const id = await db.insert(
       `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, reason)
@@ -683,6 +849,23 @@ api.post(
     if (!request) throw new HttpError(404, 'No such request.');
     if (!(await canManage(req.user!, request.user_id))) {
       throw new HttpError(403, 'That request is not yours to decide.');
+    }
+
+    // Checked again here, not just when it was raised. The balance can have
+    // moved since — another request approved, a correction, a new accrual year
+    // — so approving on the strength of the original check trusts a number that
+    // may no longer be true.
+    if (body.status === 'APPROVED') {
+      const balance = await db.get<{ balance_hours: number }>(
+        'SELECT balance_hours FROM accruals WHERE user_id = ? AND accrual_type = ?',
+        [request.user_id, request.accrual_type],
+      );
+      const verdict = assessApproval({
+        accrualType: request.accrual_type,
+        hours: request.hours,
+        balanceHours: balance?.balance_hours ?? 0,
+      });
+      if (!verdict.ok) throw new HttpError(400, verdict.reason!);
     }
 
     await db.run('UPDATE time_off_requests SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?', [

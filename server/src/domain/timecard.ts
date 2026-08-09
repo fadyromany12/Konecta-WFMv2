@@ -57,8 +57,12 @@ export interface TimecardSummary {
   formatted: Record<string, string>;
 }
 
-const ABSENCE_CODES = new Set(['LT', 'LE', 'ABS', 'NCS', 'MAA', 'LLU', 'LB', 'UTO']);
-const PAID_TIME_OFF_CODES = new Set(['PTO', 'SCK']);
+export const ABSENCE_CODES = new Set(['LT', 'LE', 'ABS', 'NCS', 'MAA', 'LLU', 'LB', 'UTO']);
+export const PAID_TIME_OFF_CODES = new Set(['PTO', 'SCK']);
+/** Time that pays a premium rather than the base rate. */
+export const OVERTIME_CODE = 'OT';
+/** The unpaid meal. Named because two other modules need to skip it. */
+export const MEAL_CODE = 'LUN';
 
 export function rowMinutes(row: TimecardRow): number {
   return diffMinutes(row.startAt, row.endAt);
@@ -208,13 +212,13 @@ export function summarize(rows: TimecardRow[]): TimecardSummary {
   for (const row of rows) {
     const mins = Math.max(0, rowMinutes(row));
     const code = row.code;
-    if (code === 'OT') {
+    if (code === OVERTIME_CODE) {
       overtime += mins;
     } else if (PAID_TIME_OFF_CODES.has(code)) {
       paidTimeOff += mins;
     } else if (ABSENCE_CODES.has(code)) {
       absence += mins;
-    } else if (code === 'LUN') {
+    } else if (code === MEAL_CODE) {
       unpaidMeal += mins;
     } else if (isRowPaid(row)) {
       regular += mins;

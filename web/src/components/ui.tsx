@@ -246,9 +246,20 @@ function cellWidth(row: number, column: number): number {
   return [92, 64, 78, 55, 85][seed];
 }
 
-export function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
+export function Stat({
+  label,
+  value,
+  tone,
+  title,
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: string;
+  /** Hover explanation, for figures whose definition is not obvious from the label. */
+  title?: string;
+}) {
   return (
-    <div className={`stat ${tone ? `stat-${tone}` : ''}`}>
+    <div className={`stat ${tone ? `stat-${tone}` : ''}`} title={title}>
       <span className="stat-label">{label}</span>
       <span className="stat-value">{value}</span>
     </div>

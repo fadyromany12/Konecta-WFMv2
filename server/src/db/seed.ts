@@ -50,12 +50,55 @@ const DAY_SHIFT: SeedRow[] = [
 const DAY_END = '17:30';
 
 /**
+ * A day worked straight through, for the one advisor the break rule points at.
+ *
+ * The ordinary templates are compliant — they carry two breaks and a meal — so
+ * with only those the five hour rule would never fire on seeded data, and a
+ * warning that never fires teaches people the screen is decorative. This is the
+ * shape of a real breach: the meal pushed to the end of a busy afternoon, so
+ * the morning runs six and a half hours unbroken.
+ */
+const UNBROKEN_SHIFT: SeedRow[] = [
+  { time: '09:00', activityKey: 'SHIFT_START' },
+  { time: '15:30', activityKey: 'LUNCH' },
+  { time: '16:00', activityKey: 'OPEN_TIME' },
+];
+
+/**
  * Build the demonstration dataset. Safe to call at any time: it does nothing if
  * the database already has users unless `force` is set. Exported so a
  * serverless cold start can seed its own ephemeral database, which is how the
  * hosted testing deployment gets its data.
  */
+/**
+ * Seed the database, all of it or none of it.
+ *
+ * The work below is split into sections that each opened their own
+ * transaction, which is fine until one of them does not finish. Against a
+ * hosted Postgres the first cold start pays for every insert as a network
+ * round trip, and a serverless function has thirty seconds — production hit
+ * exactly that on its first request after being pointed at Supabase, timing
+ * out partway through.
+ *
+ * Per-section transactions make that outcome the worst possible one: the
+ * users commit, the forecast never runs, and `ensureSeeded` — which asks only
+ * whether any users exist — sees a seeded database and never repairs it. The
+ * deployment then looks fine and is quietly missing half its data.
+ *
+ * One transaction around the whole thing turns a timeout into a rollback, so
+ * the next request finds an empty database and starts again. Both drivers
+ * join a transaction already in progress rather than opening a second, so the
+ * sections below need no changes.
+ *
+ * This makes failure clean; it does not make the seed fast. Sending each row
+ * individually is what costs the thirty seconds, and batching the inserts is
+ * the fix for that.
+ */
 export async function seed(options: { force?: boolean; quiet?: boolean } = {}): Promise<{ seeded: boolean }> {
+  return transact(() => runSeed(options));
+}
+
+async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Promise<{ seeded: boolean }> {
   const { force = false, quiet = false } = options;
   const say = (...args: unknown[]) => {
     if (!quiet) console.log(...args);
@@ -352,8 +395,11 @@ export async function seed(options: { force?: boolean; quiet?: boolean } = {}): 
       // the last thing you would do to somebody in their first fortnight.
       if (restDaysFor(userId).has(dow)) continue;
 
-      const template = night ? NIGHT_SHIFT : DAY_SHIFT;
-      const endTime = night ? NIGHT_END : DAY_END;
+      // One advisor works their mornings straight through, so the five hour
+      // break rule has something true to point at.
+      const worksThrough = userId === dayAdvisors[1];
+      const template = worksThrough ? UNBROKEN_SHIFT : night ? NIGHT_SHIFT : DAY_SHIFT;
+      const endTime = worksThrough ? DAY_END : night ? NIGHT_END : DAY_END;
 
       const rows = template.map((r) => ({
         startAt: stamp(date, r.time),

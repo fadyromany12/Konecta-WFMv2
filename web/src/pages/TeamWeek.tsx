@@ -5,6 +5,7 @@ import { useAsync, useSession } from '../state';
 import { useToast } from '../components/Toast';
 import { Banner, Button, Card, Chip, GroupPicker, SkeletonTable, Toolbar } from '../components/ui';
 import { addDays, today } from '../lib/time';
+import { pulseSuccess } from '../lib/interaction';
 
 /**
  * The team's week, one screen.
@@ -22,7 +23,7 @@ import { addDays, today } from '../lib/time';
  */
 
 interface Breach {
-  kind: 'rest' | 'consecutive' | 'weekly';
+  kind: 'rest' | 'consecutive' | 'weekly' | 'daily' | 'break' | 'overtime';
   date: string;
   message: string;
   over: number;
@@ -129,13 +130,14 @@ export function TeamWeek() {
     return counts;
   }, [people]);
 
-  async function publish() {
+  async function publish(element?: HTMLElement | null) {
     setPublishing(true);
     try {
       const result = await api.post<{ published: number; affected: { userId: number }[] }>(
         '/schedules/publish',
         { group, start, end },
       );
+      pulseSuccess(element);
       toast.success(
         `Published ${result.published} day${result.published === 1 ? '' : 's'}.`,
         result.affected.length === 0
@@ -187,7 +189,7 @@ export function TeamWeek() {
         <Button onClick={() => setStart(addDays(start, -7))}>← Previous</Button>
         <Button onClick={() => setStart(weekStart(today()))}>This week</Button>
         <Button onClick={() => setStart(addDays(start, 7))}>Next →</Button>
-        <Button variant="primary" onClick={publish} disabled={drafts === 0 || publishing}>
+        <Button variant="primary" onClick={(e) => void publish(e.currentTarget)} disabled={drafts === 0 || publishing}>
           {publishing ? 'Publishing…' : drafts === 0 ? 'Nothing to publish' : `Publish ${drafts} day${drafts === 1 ? '' : 's'}`}
         </Button>
         <div style={{ flex: 1 }} />
@@ -199,10 +201,10 @@ export function TeamWeek() {
 
       {breaching > 0 && (
         <Banner tone="warn">
-          {breaching} {breaching === 1 ? 'person' : 'people'} in this week breach a working-time limit — too
-          little rest between shifts, too many days in a row, or too many hours. Hover the ⚠ beside a name for
-          which. These are warnings, not refusals: somebody volunteering to cover is a real thing, and a tool
-          that blocked it would just be worked around on paper.
+          {breaching} {breaching === 1 ? 'person' : 'people'} in this week breach a working-time limit — five
+          hours without a break, too little rest between shifts, too many days in a row, or too many hours.
+          Hover the ⚠ beside a name for which. These are warnings, not refusals: somebody volunteering to cover
+          is a real thing, and a tool that blocked it would just be worked around on paper.
         </Banner>
       )}
 
@@ -391,7 +393,9 @@ function breachLabel(breaches: Breach[]): string {
   const kinds = new Set(breaches.map((b) => b.kind));
   const parts: string[] = [];
   if (kinds.has('rest')) parts.push('rest');
+  if (kinds.has('break')) parts.push('no break');
   if (kinds.has('consecutive')) parts.push('days in a row');
-  if (kinds.has('weekly')) parts.push('hours');
+  if (kinds.has('daily') || kinds.has('overtime')) parts.push('long day');
+  if (kinds.has('weekly')) parts.push('weekly hours');
   return parts.join(', ');
 }

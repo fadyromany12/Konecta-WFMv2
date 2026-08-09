@@ -30,14 +30,15 @@ types.setTypeParser(20, (value) => (value === null ? null : Number(value)));
 
 type Client = pg.PoolClient;
 
-export function createPostgresDatabase(connectionString: string): Db {
+export function createPostgresDatabase(rawConnectionString: string): Db {
+  const connectionString = withoutSslMode(rawConnectionString);
   const pool = new Pool({
     connectionString,
     // Hosted Postgres almost always terminates TLS with a certificate this
     // process has no root for. The connection is still encrypted; it is the
     // certificate chain that is not verified. Set PULSE_DB_SSL=verify when the
     // deployment has a CA available and this should be strict.
-    ssl: sslSetting(connectionString),
+    ssl: sslSetting(rawConnectionString),
     // A serverless instance handles one request at a time and may be frozen at
     // any moment, so a wide pool is wasted file descriptors on the database.
     max: Number(process.env.PULSE_DB_POOL ?? (process.env.VERCEL ? 1 : 10)),
@@ -116,6 +117,33 @@ export function createPostgresDatabase(connectionString: string): Db {
       await pool.end();
     },
   };
+}
+
+/**
+ * Take `sslmode` out of the URL so our own `ssl` option is the one that counts.
+ *
+ * Hosted providers hand you a string ending `?sslmode=require`, which in libpq
+ * means *encrypt, do not verify the certificate*. Current `pg` versions parse
+ * that and treat `require` as `verify-full` — strictly stronger than what the
+ * string asks for — and the parsed value wins over the `ssl` option passed
+ * alongside it. Against Supabase's pooler, whose chain Node has no root for,
+ * that is an immediate SELF_SIGNED_CERT_IN_CHAIN and every request 503s.
+ *
+ * `pg` itself warns about this and suggests `uselibpqcompat=true`. Rather than
+ * depend on a flag whose meaning is mid-migration, the parameter is removed and
+ * the decision made in one place below — which also means a copied-and-pasted
+ * URL cannot quietly change how this deployment verifies TLS.
+ */
+function withoutSslMode(connectionString: string): string {
+  if (!/[?&]sslmode=/i.test(connectionString)) return connectionString;
+  try {
+    const url = new URL(connectionString);
+    url.searchParams.delete('sslmode');
+    return url.toString();
+  } catch {
+    // Not a parseable URL — leave it alone rather than corrupt it.
+    return connectionString;
+  }
 }
 
 function sslSetting(connectionString: string): { rejectUnauthorized: boolean } | boolean {

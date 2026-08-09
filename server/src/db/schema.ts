@@ -313,6 +313,24 @@ CREATE TABLE IF NOT EXISTS payroll_periods (
   run_at     TEXT,
   UNIQUE (region, start_date)
 );
+
+-- Public holidays, which decide whether a worked day pays triple.
+--
+-- A table rather than a computation, even though most of the calendar is
+-- derivable, because the Islamic dates are not: Egypt settles them by sighting
+-- and the arithmetic calendar can be a day out either way. The confirmed flag
+-- separates a date somebody has verified from the calendar's opening guess,
+-- and an unconfirmed date must not silently drive a payment.
+CREATE TABLE IF NOT EXISTS public_holidays (
+  date        TEXT NOT NULL,
+  region      TEXT NOT NULL DEFAULT 'EG',
+  name        TEXT NOT NULL,
+  basis       TEXT NOT NULL DEFAULT 'GREGORIAN',
+  confirmed   INTEGER NOT NULL DEFAULT 1,
+  confirmed_by INTEGER REFERENCES users(id),
+  created_at  TEXT NOT NULL DEFAULT {{NOW}},
+  PRIMARY KEY (region, date)
+);
 `;
 
 /**

@@ -9,7 +9,13 @@
  */
 
 import { db, placeholders } from '../db/index.js';
-import { SHIFT_RULE_MAP, DEFAULT_SHIFT_RULE, type Role, type ShiftRule } from '../domain/reference.js';
+import {
+  SHIFT_RULE_MAP,
+  DEFAULT_SHIFT_RULE,
+  SUPERVISOR_ROLES,
+  type Role,
+  type ShiftRule,
+} from '../domain/reference.js';
 import { diffDays, type DateStr } from '../domain/time.js';
 
 export { placeholders };
@@ -116,8 +122,20 @@ export async function visibleUserIds(viewer: UserRow): Promise<number[]> {
   return [...ids];
 }
 
+/**
+ * May this user act on, or see, another person's record?
+ *
+ * `visibleUserIds` deliberately includes peers under the same second-level
+ * manager, so a supervisor can cover for a colleague's team without an access
+ * request. That is the right rule for the Who dropdown and the wrong one for
+ * a record: applied to an advisor it returned their whole team, which meant one
+ * advisor could read another's timecard, leave balance and personal history —
+ * their sick leave among it. Peer cover is a supervisor's job, so only a
+ * supervising role reaches past themselves at all.
+ */
 export async function canManage(viewer: UserRow, targetId: number): Promise<boolean> {
   if (viewer.id === targetId) return true;
+  if (!SUPERVISOR_ROLES.includes(viewer.role)) return false;
   return (await visibleUserIds(viewer)).includes(targetId);
 }
 

@@ -22,9 +22,17 @@ import {
   type Issue,
   type TimecardRow,
 } from '../domain/timecard.js';
+import {
+  costTimecard,
+  dayCharacter,
+  type DayCharacter,
+  type HolidayElection,
+  type PayLine,
+} from '../domain/pay.js';
 import { addDays, nowStamp, todayStr, type DateStr } from '../domain/time.js';
 import { effectiveShiftRule, getUser } from './people.js';
 import { getShifts } from './scheduling.js';
+import { holidayDates } from './holidays.js';
 import { emit, notify } from './events.js';
 
 export interface TimecardRecord {
@@ -42,6 +50,7 @@ export interface TimecardRecord {
   edited: number;
   notes: string | null;
   correction_reason: string | null;
+  holiday_election: string | null;
 }
 
 export interface TimecardView {
@@ -63,6 +72,12 @@ export interface TimecardView {
   inProgress: boolean;
   edited: boolean;
   correctionReason: string | null;
+  /**
+   * How a worked public holiday was settled, or null while nobody has chosen.
+   * Null is a real state rather than a missing value: it means a supervisor
+   * still owes a decision, and the payroll screen has to be able to say so.
+   */
+  holidayElection: string | null;
   exceptions: string[];
   notes: string[];
   issues: Issue[];
@@ -233,6 +248,7 @@ export async function viewTimecard(params: {
     inProgress: !!record.in_progress,
     edited: !!record.edited,
     correctionReason: record.correction_reason ?? null,
+    holidayElection: record.holiday_election ?? null,
     exceptions: exceptionCodes(rows),
     notes: safeParse(record.notes),
     issues: validateTimecard(rows, record.payroll_date),
@@ -457,6 +473,19 @@ export interface PayrollSummaryRow {
   protectDate: string | null;
   hasErrors: boolean;
   exceptions: string[];
+  /** What kind of day this was, which is what sets the rate. */
+  dayCharacter: DayCharacter;
+  /** How a worked public holiday was settled; null while a supervisor still owes a decision. */
+  holidayElection: string | null;
+  electionOutstanding: boolean;
+  /** The cost, in hours at the base rate — `HH:MM` like everything else here. */
+  paid: string;
+  /** The part of the cost that the premiums added. */
+  premium: string;
+  paidMinutes: number;
+  premiumMinutes: number;
+  payLines: PayLine[];
+  payNotes: string[];
 }
 
 export async function payrollSummary(params: {
@@ -466,6 +495,8 @@ export async function payrollSummary(params: {
   actorId: number | null;
 }): Promise<PayrollSummaryRow[]> {
   const out: PayrollSummaryRow[] = [];
+  // One calendar read for the whole period rather than one per card.
+  const holidays = await holidayDates(params.start, params.end);
   for (const userId of params.userIds) {
     // Postgres requires a name for a derived table; SQLite does not mind one.
     const rows = await db.all<{ payroll_date: string }>(
@@ -479,6 +510,19 @@ export async function payrollSummary(params: {
     for (const { payroll_date: date } of rows) {
       const view = await viewTimecard({ userId, date, actorId: params.actorId });
       if (!view) continue;
+
+      // A day nobody was rostered on that nonetheless has a card is a rest day
+      // that got cancelled, and that is what makes it cost double. The roster
+      // read includes drafts on purpose: an unpublished shift still means the
+      // person was expected, so the day is not a cancelled rest day.
+      const scheduled = (await getShifts(userId, date, { includeDrafts: true })).length > 0;
+      const character = dayCharacter({ date, holidays, scheduled });
+      const cost = costTimecard({
+        rows: view.rows,
+        dayCharacter: character,
+        election: view.holidayElection as HolidayElection | null,
+      });
+
       out.push({
         userId,
         employeeId: view.employeeId,
@@ -496,6 +540,15 @@ export async function payrollSummary(params: {
         protectDate: view.protectDate,
         hasErrors: view.issues.some((i) => i.level === 'error'),
         exceptions: view.exceptions,
+        dayCharacter: character,
+        holidayElection: view.holidayElection,
+        electionOutstanding: cost.electionOutstanding,
+        paid: cost.formatted.paid,
+        premium: cost.formatted.premium,
+        paidMinutes: cost.paidMinutes,
+        premiumMinutes: cost.premiumMinutes,
+        payLines: cost.lines,
+        payNotes: cost.notes,
       });
     }
   }
