@@ -48,6 +48,20 @@ const sqliteFile =
 export const USING_POSTGRES = postgresUrl !== null;
 export const IS_MEMORY = !USING_POSTGRES && sqliteFile === ':memory:';
 
+// Running on ephemeral memory is a legitimate choice for a demo and a silent
+// disaster for anything else: every cold start reseeds, so a record written a
+// minute ago may simply not exist. It looks healthy from the outside — the
+// deployment answers 200 and the data is plausible — which is exactly why it
+// needs saying out loud rather than being left to whoever reads /api/health.
+if (IS_MEMORY && process.env.VERCEL) {
+  console.warn(
+    'WARNING: no Postgres URL is set, so this deployment is running on an in-memory database. ' +
+      'Every cold start wipes it and instances do not share data. ' +
+      'Set POSTGRES_URL and redeploy — Vercel captures environment variables when a deployment is built, ' +
+      'so adding the variable alone will not change a deployment that is already live.',
+  );
+}
+
 export const db: Database = USING_POSTGRES
   ? createPostgresDatabase(postgresUrl!)
   : createSqliteDatabase(sqliteFile);
