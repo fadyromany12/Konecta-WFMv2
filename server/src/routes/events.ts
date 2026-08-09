@@ -12,7 +12,14 @@ import { db } from '../db/index.js';
 import { authenticate, authenticateStream, requireSupervisor } from '../middleware/auth.js';
 import { asyncRoute, HttpError } from '../middleware/errors.js';
 import { canManage, resolveGroup } from '../services/people.js';
-import { emit, listNotifications, markAllRead, subscribe, subscriberCount } from '../services/events.js';
+import {
+  emit,
+  listNotifications,
+  markAllRead,
+  subscribe,
+  subscriberCount,
+  STREAMING_SUPPORTED,
+} from '../services/events.js';
 import { payrollSummary, setApproval } from '../services/timecards.js';
 import { uncleanReason } from '../domain/bulkApproval.js';
 import { todayStr } from '../domain/time.js';
@@ -26,6 +33,22 @@ events.get(
   '/events',
   authenticateStream,
   asyncRoute(async (req, res) => {
+    // Say so and hang up, rather than holding a paid invocation open for
+    // thirty seconds to deliver events this instance mostly cannot see. The
+    // long retry is for a client that ignores the message: it still costs one
+    // short request every ten minutes instead of a permanent connection.
+    if (!STREAMING_SUPPORTED) {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache, no-transform',
+        'x-accel-buffering': 'no',
+      });
+      res.write('retry: 600000\n');
+      res.write(`event: unavailable\ndata: ${JSON.stringify({ reason: 'serverless' })}\n\n`);
+      res.end();
+      return;
+    }
+
     const lastEventId = Number(req.headers['last-event-id'] ?? req.query.lastEventId ?? 0) || 0;
     const teardown = await subscribe(req.user!, res, lastEventId);
     // If the client hung up while the audience was being resolved, tear down
@@ -36,7 +59,7 @@ events.get(
 );
 
 events.get('/events/status', authenticate, (_req, res) => {
-  res.json({ connections: subscriberCount() });
+  res.json({ streaming: STREAMING_SUPPORTED, connections: subscriberCount() });
 });
 
 // ----------------------------------------------------------- notifications

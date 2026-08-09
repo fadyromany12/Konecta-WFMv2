@@ -72,6 +72,16 @@ const LiveContext = createContext<LiveApi | null>(null);
 
 /** Give up on the stream after this many consecutive failures and just poll. */
 const MAX_RETRIES = 4;
+/**
+ * How long a stream has to last before a disconnection counts as an ordinary
+ * blip rather than a failure worth counting.
+ *
+ * A minute is comfortably longer than a serverless function's timeout and
+ * comfortably shorter than a real session, so a stream being killed at its
+ * ceiling reads as broken while a genuine network wobble after an hour of
+ * useful streaming does not.
+ */
+const PRODUCTIVE_MS = 60000;
 
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { user } = useSession();
@@ -144,10 +154,26 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       // headers. The server accepts it only on this one read-only route.
       source = new EventSource(`/api/events?token=${encodeURIComponent(token!)}&lastEventId=${lastId}`);
 
+      const openedAt = Date.now();
+
       source.onopen = () => {
-        retries = 0;
+        // Deliberately *not* resetting `retries` here. Opening is not success:
+        // on a serverless host the stream opens perfectly and is then killed at
+        // the function timeout, so resetting on open meant the circuit breaker
+        // below could never trip and the app reconnected every thirty seconds
+        // for as long as the tab was left open. The counter is reset by a
+        // received event instead — the only thing that proves the stream works.
         setConnected(true);
       };
+
+      // The server saying it will not stream. Nothing is wrong; the poll is
+      // the intended path there, so stop asking.
+      source.addEventListener('unavailable', () => {
+        closed = true;
+        source?.close();
+        source = null;
+        setConnected(false);
+      });
 
       // Every named event kind arrives as its own type, plus the default.
       const kinds: EventKind[] = [
@@ -167,7 +193,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         source?.close();
         source = null;
         if (closed) return;
+        // A connection that opened and then died without ever delivering
+        // anything counts as a failure, however cleanly it opened.
         retries += 1;
+        if (Date.now() - openedAt > PRODUCTIVE_MS) retries = 1;
         if (retries > MAX_RETRIES) {
           // Something structural is wrong with the stream. Stop hammering it;
           // every screen still has its poll.

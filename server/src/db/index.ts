@@ -155,3 +155,43 @@ export function transact<T>(fn: () => Promise<T>): Promise<T> {
 export function placeholders(n: number): string {
   return n === 0 ? 'NULL' : new Array(n).fill('?').join(',');
 }
+
+/**
+ * Insert many rows in as few statements as the engine will allow.
+ *
+ * Against a local file the difference is invisible, which is exactly why this
+ * was easy to get wrong: the seed sent one statement per row, and against a
+ * hosted Postgres each one is a network round trip. Seeding measured at 7,403
+ * statements, and production's first request after being pointed at Supabase
+ * timed out partway through at thirty seconds — 7,403 round trips is what
+ * thirty seconds buys at that latency.
+ *
+ * Chunked by parameter count rather than row count, because the ceiling is on
+ * parameters: Postgres refuses past 65,535 and SQLite has its own lower limit
+ * that varies by build. Nine hundred is comfortably under every version of
+ * both, and the round trips saved are already two orders of magnitude — going
+ * closer to either ceiling buys very little and risks the one build that
+ * disagrees.
+ */
+export async function insertMany(
+  table: string,
+  columns: string[],
+  rows: readonly (readonly unknown[])[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+
+  const perRow = columns.length;
+  const rowsPerStatement = Math.max(1, Math.floor(900 / perRow));
+  const tuple = `(${placeholders(perRow)})`;
+  let written = 0;
+
+  for (let i = 0; i < rows.length; i += rowsPerStatement) {
+    const chunk = rows.slice(i, i + rowsPerStatement);
+    const info = await db.run(
+      `INSERT INTO ${table} (${columns.join(', ')}) VALUES ${chunk.map(() => tuple).join(', ')}`,
+      chunk.flatMap((row) => [...row]),
+    );
+    written += info.changes;
+  }
+  return written;
+}

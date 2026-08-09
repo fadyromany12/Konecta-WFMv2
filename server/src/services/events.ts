@@ -99,6 +99,29 @@ export function emit(
 }
 
 /**
+ * Whether holding a stream open is worth what it costs here.
+ *
+ * On a long-running server it plainly is. On a serverless platform it is not,
+ * for two reasons that compound:
+ *
+ * - **It barely works.** `subscribers` lives in one instance's memory. An event
+ *   raised while handling a punch on instance A is invisible to a supervisor
+ *   whose stream is held by instance B, and which instance you get is not
+ *   something either end controls. Cross-user events — the entire point —
+ *   arrive by luck.
+ * - **It is the most expensive thing in the deployment.** The platform bills
+ *   wall-clock time and kills a function at its timeout, so every connected
+ *   browser burns a full invocation, forever, and logs an error each time it
+ *   is killed. Twenty in three hours from a single open tab, which is ten
+ *   minutes of compute for one person reading a screen.
+ *
+ * So it is switched off there, and the client is told to fall back to its poll
+ * instead of being left to discover the truth thirty seconds at a time. The
+ * poll was always the floor; on serverless it is simply the whole floor.
+ */
+export const STREAMING_SUPPORTED = !process.env.VERCEL;
+
+/**
  * Attach a response as an SSE stream. Returns a teardown the route registers
  * against the request closing.
  */

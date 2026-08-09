@@ -11,7 +11,7 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { audit, db, ensureSchema, transact } from './index.js';
+import { audit, db, ensureSchema, insertMany, transact } from './index.js';
 import { ACTIVITIES } from '../domain/reference.js';
 import type { ScheduleActivityKey } from '../domain/reference.js';
 import type { ScheduleShift } from '../domain/schedule.js';
@@ -674,6 +674,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
   ];
 
   await transact(async () => {
+    const intervals: unknown[][] = [];
     for (let offset = -14; offset <= 7; offset++) {
       const date = addDays(today, offset);
       const dow = new Date(date + 'T00:00:00Z').getUTCDay();
@@ -688,12 +689,16 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
         // actually spends their time on.
         const volume = Math.round(share * 11 * dayFactor);
         const aht = 210 + ((i * 13) % 70); // handling time drifts through the day
-        await db.run(
-          'INSERT INTO forecast_intervals (project_id, date, start_time, volume, aht_seconds) VALUES (?, ?, ?, ?, ?)',
-          ['A123', date, startTime, volume, aht],
-        );
+        intervals.push(['A123', date, startTime, volume, aht]);
       }
     }
+    // Forty-eight intervals a day across three weeks was over a thousand
+    // statements on its own — the single largest thing the seed did.
+    await insertMany(
+      'forecast_intervals',
+      ['project_id', 'date', 'start_time', 'volume', 'aht_seconds'],
+      intervals,
+    );
   });
 
   // ------------------------------------------------------------ self service

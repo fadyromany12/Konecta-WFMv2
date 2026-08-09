@@ -8,7 +8,7 @@
  * time.
  */
 
-import { audit, db, transact } from '../db/index.js';
+import { audit, db, insertMany, transact } from '../db/index.js';
 import type { Role } from '../domain/reference.js';
 import { evaluateEdit, type EditDecision } from '../domain/editWindow.js';
 import { buildTimecard, type Punch } from '../domain/punchEngine.js';
@@ -100,12 +100,11 @@ async function readRows(timecardId: number): Promise<TimecardRow[]> {
 
 async function writeRows(timecardId: number, rows: TimecardRow[]): Promise<void> {
   await db.run('DELETE FROM timecard_rows WHERE timecard_id = ?', [timecardId]);
-  for (const [i, row] of rows.entries()) {
-    await db.run(
-      'INSERT INTO timecard_rows (timecard_id, code, project, activity, start_at, end_at, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [timecardId, row.code, row.project, row.activity, row.startAt, row.endAt, i],
-    );
-  }
+  await insertMany(
+    'timecard_rows',
+    ['timecard_id', 'code', 'project', 'activity', 'start_at', 'end_at', 'sort_order'],
+    rows.map((row, i) => [timecardId, row.code, row.project, row.activity, row.startAt, row.endAt, i]),
+  );
 }
 
 async function getPunches(userId: number, date: DateStr): Promise<Punch[]> {

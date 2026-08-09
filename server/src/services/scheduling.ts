@@ -4,7 +4,7 @@
  * stored form has exactly one representation of the truth.
  */
 
-import { audit, db, placeholders, transact } from '../db/index.js';
+import { audit, db, insertMany, placeholders, transact } from '../db/index.js';
 import type { ScheduleActivityKey } from '../domain/reference.js';
 import {
   resolveRowDates,
@@ -549,12 +549,14 @@ export async function saveShifts(params: {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [userId, date, shift.shiftNo, shift.endAt, source, nowStamp(), status, publishedAt],
       );
-      for (const [i, row] of shift.rows.entries()) {
-        await db.run(
-          'INSERT INTO schedule_rows (schedule_id, start_at, activity_key, sort_order) VALUES (?, ?, ?, ?)',
-          [scheduleId, row.startAt, row.activityKey, i],
-        );
-      }
+      // One statement rather than one per row. A shift is eight or so rows, so
+      // against a hosted database this is eight round trips saved every time a
+      // schedule is written — and the seed writes hundreds of them.
+      await insertMany(
+        'schedule_rows',
+        ['schedule_id', 'start_at', 'activity_key', 'sort_order'],
+        shift.rows.map((row, i) => [scheduleId, row.startAt, row.activityKey, i]),
+      );
     }
     await audit(actorId, 'schedule', `${userId}:${date}`, 'SAVE', {
       status,
