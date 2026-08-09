@@ -13,12 +13,16 @@ import {
   costShift,
   costTimecard,
   dayCharacter,
+  earnsNightAllowance,
+  nightAllowance,
   noCost,
   totalCost,
   type DayCharacter,
   type HolidayElection,
+  type NightAllowance,
   type PayBreakdown,
 } from '../domain/pay.js';
+import { ramadanDates } from '../domain/holidays.js';
 import { dateRange, nowStamp, todayStr, type DateStr } from '../domain/time.js';
 import { holidayDates } from './holidays.js';
 import { getShifts } from './scheduling.js';
@@ -195,3 +199,91 @@ async function creditAccrual(userId: number, type: string, hours: number): Promi
 }
 
 export type { DayCharacter, HolidayElection, PayBreakdown };
+
+export interface NightAllowanceView extends NightAllowance {
+  userId: number;
+  month: string;
+  /**
+   * False while the month is still running, so a fraction read mid-month is
+   * not mistaken for the one that gets paid.
+   */
+  complete: boolean;
+  /** The nights themselves, so a disputed fraction can be checked day by day. */
+  nights: { date: DateStr; worked: boolean }[];
+}
+
+/**
+ * How much of the monthly night allowance somebody earned.
+ *
+ * A month rather than an arbitrary range, because the allowance is monthly and
+ * a fraction of some other window would not mean anything.
+ *
+ * The days are returned alongside the fraction on purpose. "20/22" is the
+ * number that gets paid and the number that gets argued about, and an advisor
+ * asking which two nights they lost deserves an answer better than a
+ * recalculation.
+ */
+export async function nightAllowanceFor(params: {
+  userId: number;
+  month: string;
+  actorId: number | null;
+}): Promise<NightAllowanceView> {
+  const start = `${params.month}-01`;
+  const monthEnd = lastDayOf(params.month);
+  // Stop at today in the current month. A night still in the future has not
+  // been missed — it has not happened — and counting it as unworked reported
+  // somebody four elevenths of the way through the month as having lost seven
+  // nights. Once the month is over this is simply the whole month.
+  const today = todayStr();
+  const end = monthEnd < today ? monthEnd : today;
+  const complete = monthEnd <= today;
+
+  const days: { scheduled: boolean; worked: boolean }[] = [];
+  const nights: { date: DateStr; worked: boolean }[] = [];
+
+  if (end < start) {
+    return { ...nightAllowance([]), userId: params.userId, month: params.month, nights, complete: false };
+  }
+
+  for (const date of dateRange(start, end)) {
+    // Published only: an allowance cannot be earned against a roster nobody was
+    // ever shown.
+    const shifts = await getShifts(params.userId, date);
+    const isNight = shifts.some((shift) => earnsNightAllowance(shift));
+    if (!isNight) {
+      days.push({ scheduled: false, worked: false });
+      continue;
+    }
+
+    const view = await viewTimecard({
+      userId: params.userId,
+      date,
+      autoGenerate: false,
+      actorId: params.actorId,
+    });
+    // Worked means worked. Paid leave keeps somebody's salary whole and does
+    // not put them on a night shift, so it does not earn the allowance.
+    const worked = !!view && costTimecard({ rows: view.rows, dayCharacter: 'ORDINARY' }).workedMinutes > 0;
+    days.push({ scheduled: true, worked });
+    nights.push({ date, worked });
+  }
+
+  return { ...nightAllowance(days), userId: params.userId, month: params.month, nights, complete };
+}
+
+/** The last day of a `YYYY-MM`, without trusting month lengths to a lookup table. */
+function lastDayOf(month: string): DateStr {
+  const [year, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(year, m, 0)).toISOString().slice(0, 10);
+}
+
+/** The Ramadan dates covering a span, for the shorter working day. */
+export async function ramadanFor(start: DateStr, end: DateStr): Promise<Set<DateStr>> {
+  const days = new Set<DateStr>();
+  for (let year = Number(start.slice(0, 4)); year <= Number(end.slice(0, 4)); year++) {
+    for (const date of ramadanDates(year)) {
+      if (date >= start && date <= end) days.add(date);
+    }
+  }
+  return days;
+}

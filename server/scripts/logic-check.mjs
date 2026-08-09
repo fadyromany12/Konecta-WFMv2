@@ -691,6 +691,47 @@ check('somebody with a project of their own still gets theirs',
 check('an advisor is still refused the forecast',
   (await call('GET','/forecast',ADV)).status === 403);
 
+console.log('=== NIGHT ALLOWANCE AND RAMADAN ===');
+const thisMonth = day(0).slice(0, 7);
+const lastMonth = day(-32).slice(0, 7);
+
+const na = (await call('GET',`/pay/night-allowance/6?month=${thisMonth}`,TL)).body;
+check('a night allowance comes back as a fraction', /^\d+\/\d+$/.test(na?.fraction ?? ''), na?.fraction);
+check('worked never exceeds scheduled', na.worked <= na.scheduled);
+check('the percentage agrees with the fraction',
+  na.scheduled === 0 || Math.abs(na.percent - (na.worked / na.scheduled) * 100) < 0.1);
+check('the nights are listed so a disputed fraction can be checked',
+  na.nights.length === na.scheduled, `${na.nights.length} vs ${na.scheduled}`);
+check('every listed night is a real date', na.nights.every((n) => /^\d{4}-\d{2}-\d{2}$/.test(n.date)));
+check('the current month is not reported as final', na.complete === false);
+check('a finished month is reported as final',
+  (await call('GET',`/pay/night-allowance/6?month=${lastMonth}`,TL)).body?.complete === true);
+
+// The bug this had first: a night still in the future is not a night somebody
+// missed, and counting it as unworked understated the month badly.
+check('no night in the future is counted',
+  na.nights.every((n) => n.date <= day(0)), JSON.stringify(na.nights.filter((n) => n.date > day(0))));
+
+check('a day worker earns no night allowance',
+  (await call('GET',`/pay/night-allowance/${(await call('GET','/people',TL)).body.people.find((p)=>p.role==='TEAM_LEADER').id}?month=${thisMonth}`,TL))
+    .body?.scheduled === 0);
+check('an advisor can read their own allowance',
+  (await call('GET',`/pay/night-allowance/6?month=${thisMonth}`,ADV)).status === 200);
+check('an advisor cannot read a peer\'s allowance',
+  (await call('GET',`/pay/night-allowance/3?month=${thisMonth}`,ADV)).status === 403);
+check('a malformed month is refused',
+  (await call('GET','/pay/night-allowance/6?month=August',TL)).status === 400);
+
+const ram = (await call('GET',`/pay/ramadan?start=${YEAR}-01-01&end=${YEAR}-12-31`,ADV)).body;
+check('Ramadan is a shorter day, not a holiday', ram?.normHours === 6);
+check('Ramadan covers about a month', ram.dates.length >= 28 && ram.dates.length <= 60, `${ram.dates.length} days`);
+check('Ramadan dates are in order', JSON.stringify([...ram.dates].sort()) === JSON.stringify(ram.dates));
+// A shorter working day, not a day off. Confusing the two would pay a month
+// of triple time.
+const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${YEAR}-12-31`,ADV)).body?.holidays ?? [];
+check('no Ramadan date is also a public holiday',
+  ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
+
 console.log('=== SPA ROUTING ===');
 for (const p of ['/dashboard','/admin/audit','/reports/query','/my']) {
   const res = await fetch(ORIGIN + p, { headers: { accept: 'text/html' } });

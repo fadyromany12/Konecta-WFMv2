@@ -133,6 +133,30 @@ export function holidaysFor(year: number): Holiday[] {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * The Gregorian dates Ramadan covers in a given Gregorian year.
+ *
+ * Egypt shortens the working day during Ramadan, so this is not decoration —
+ * it changes when overtime starts. Derived from the same arithmetic calendar
+ * as the Eids and carrying the same caveat: the start and end are settled by
+ * sighting and can move by a day, so the range is a starting position rather
+ * than an authority. Because a Hijri year is shorter, a Gregorian year can
+ * contain parts of two Ramadans, which is why this returns every matching day
+ * rather than one span.
+ */
+export function ramadanDates(year: number): Set<DateStr> {
+  const days = new Set<DateStr>();
+  if (!HIJRI_AVAILABLE) return days;
+  const end = `${year}-12-31`;
+  for (let date = `${year}-01-01`; date <= end; date = addDays(date, 1)) {
+    if (toHijri(date).month === RAMADAN_MONTH) days.add(date);
+  }
+  return days;
+}
+
+/** Ramadan is the ninth month of the Hijri year. */
+const RAMADAN_MONTH = 9;
+
 export function holidayRange(fromYear: number, toYear: number): Holiday[] {
   const out: Holiday[] = [];
   for (let year = fromYear; year <= toYear; year++) out.push(...holidaysFor(year));

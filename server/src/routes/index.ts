@@ -54,7 +54,9 @@ import {
   EGYPT_RATES,
   actualCost,
   electHolidaySettlement,
+  nightAllowanceFor,
   plannedCost,
+  ramadanFor,
   summariseCost,
 } from '../services/pay.js';
 import {
@@ -618,6 +620,34 @@ api.get(
         'Rest day, public holiday and the day in lieu are Konecta policy. ' +
         'Premiums do not stack: the character of the day sets the rate for every hour worked in it.',
     });
+  }),
+);
+
+/** How much of the monthly night allowance somebody earned. */
+api.get(
+  '/pay/night-allowance/:userId',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const userId = Number(req.params.userId);
+    if (userId !== req.user!.id && !(await canManage(req.user!, userId))) {
+      throw new HttpError(403, 'You cannot see that.');
+    }
+    const month = z
+      .string()
+      .regex(/^\d{4}-\d{2}$/, 'Expected a YYYY-MM month')
+      .parse(req.query.month ?? todayStr().slice(0, 7));
+    res.json(await nightAllowanceFor({ userId, month, actorId: req.user!.id }));
+  }),
+);
+
+/** The dates Egypt keeps a six hour working day, which is when overtime starts. */
+api.get(
+  '/pay/ramadan',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 365));
+    res.json({ dates: [...(await ramadanFor(start, end))].sort(), normHours: EGYPT_RATES.ramadanNormHours });
   }),
 );
 
