@@ -5,6 +5,7 @@ import { useAsync, useSession } from '../state';
 import { useToast } from '../components/Toast';
 import { Banner, Button, Card, Chip, GroupPicker, SkeletonTable, Toolbar } from '../components/ui';
 import { addDays, today } from '../lib/time';
+import { pulseSuccess } from '../lib/interaction';
 
 /**
  * The team's week, one screen.
@@ -129,13 +130,14 @@ export function TeamWeek() {
     return counts;
   }, [people]);
 
-  async function publish() {
+  async function publish(element?: HTMLElement | null) {
     setPublishing(true);
     try {
       const result = await api.post<{ published: number; affected: { userId: number }[] }>(
         '/schedules/publish',
         { group, start, end },
       );
+      pulseSuccess(element);
       toast.success(
         `Published ${result.published} day${result.published === 1 ? '' : 's'}.`,
         result.affected.length === 0
@@ -187,7 +189,7 @@ export function TeamWeek() {
         <Button onClick={() => setStart(addDays(start, -7))}>← Previous</Button>
         <Button onClick={() => setStart(weekStart(today()))}>This week</Button>
         <Button onClick={() => setStart(addDays(start, 7))}>Next →</Button>
-        <Button variant="primary" onClick={publish} disabled={drafts === 0 || publishing}>
+        <Button variant="primary" onClick={(e) => void publish(e.currentTarget)} disabled={drafts === 0 || publishing}>
           {publishing ? 'Publishing…' : drafts === 0 ? 'Nothing to publish' : `Publish ${drafts} day${drafts === 1 ? '' : 's'}`}
         </Button>
         <div style={{ flex: 1 }} />

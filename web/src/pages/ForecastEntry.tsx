@@ -5,6 +5,7 @@ import { useToast } from '../components/Toast';
 import { Banner, Button, Card, DateField, SkeletonTable, Stat, Toolbar } from '../components/ui';
 import { LineChart } from '../components/charts';
 import { today } from '../lib/time';
+import { pulseSuccess } from '../lib/interaction';
 
 /**
  * Entering the forecast.
@@ -151,10 +152,11 @@ export function ForecastEntry() {
     );
   }
 
-  async function save() {
+  async function save(element?: HTMLElement | null) {
     setSaving(true);
     try {
       await api.put('/forecast', { date, rows });
+      pulseSuccess(element);
       toast.success('Forecast saved.', 'Coverage and auto-scheduling now plan against it.');
       setDirty(false);
       setNonce((n) => n + 1);
@@ -181,7 +183,7 @@ export function ForecastEntry() {
         <DateField label="Date" value={date} onChange={setDate} />
         <Button onClick={() => setPasting((v) => !v)}>{pasting ? 'Cancel paste' : 'Paste from spreadsheet'}</Button>
         <Button onClick={clearAll}>Clear</Button>
-        <Button variant="primary" onClick={save} disabled={!dirty || saving}>
+        <Button variant="primary" onClick={(e) => void save(e.currentTarget)} disabled={!dirty || saving}>
           {saving ? 'Saving…' : 'Save forecast'}
         </Button>
         <div style={{ flex: 1 }} />

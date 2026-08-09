@@ -11,6 +11,8 @@ import {
 } from '../api';
 import { useAsync, useSession } from '../state';
 import { useLiveEvent } from '../live';
+import { Segmented } from '../components/Segmented';
+import { pulseSuccess } from '../lib/interaction';
 import { useToast } from '../components/Toast';
 import {
   Banner,
@@ -413,6 +415,14 @@ function TimecardEditor() {
   const [saveIssues, setSaveIssues] = useState<any[]>([]);
   /** Required once payroll has run over this date; the server insists too. */
   const [reason, setReason] = useState('');
+  /**
+   * The reference column beside the rows.
+   *
+   * These used to be two more cards stacked underneath, which put the thing you
+   * are checking *against* — the plan — below the fold while you edited. You
+   * cannot compare intent with actual by scrolling between them.
+   */
+  const [aside, setAside] = useState<'plan' | 'detail'>('plan');
 
   const loaded = useAsync(
     () =>
@@ -527,7 +537,12 @@ function TimecardEditor() {
     setDirty(true);
   }
 
-  async function save() {
+  /**
+   * `element` is the control that was pressed, captured by the caller *before*
+   * awaiting — React nulls `currentTarget` once the handler yields, so reading
+   * it after the round trip finds nothing.
+   */
+  async function save(element?: HTMLElement | null) {
     setSaveIssues([]);
     try {
       const res = await api.put<{ ok: boolean; issues: any[]; decision: EditDecision }>(
@@ -544,7 +559,8 @@ function TimecardEditor() {
           'It transfers on the next payroll run rather than this one.',
         );
       } else {
-        toast.success('Timecard saved.', `${card?.userName ?? ''} · ${date}`);
+        pulseSuccess(element);
+      toast.success('Timecard saved.', `${card?.userName ?? ''} · ${date}`);
       }
       setDirty(false);
       loaded.reload();
@@ -556,13 +572,15 @@ function TimecardEditor() {
     }
   }
 
-  async function approve(next: boolean) {
+  async function approve(next: boolean, element?: HTMLElement | null) {
     try {
       const res = await api.post<{ ok: boolean; message: string }>(`/timecards/${userId}/${date}/approve`, {
         approved: next,
       });
-      if (res.ok) toast.success(res.message);
-      else toast.warn(res.message);
+      if (res.ok) {
+        pulseSuccess(element);
+        toast.success(res.message);
+      } else toast.warn(res.message);
       loaded.reload();
     } catch (err) {
       toast.error((err as Error).message);
@@ -579,14 +597,69 @@ function TimecardEditor() {
     }
   }
 
+  /**
+   * Alt with a left or right arrow flips the day, from anywhere on the screen.
+   *
+   * Alt, not a bare arrow: the grid already uses arrows to move between rows
+   * and every cell on this card is a field where a bare arrow moves the caret.
+   * A shortcut that fights the text cursor is a shortcut people turn off.
+   */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+      e.preventDefault();
+      flipDay(e.key === 'ArrowLeft' ? -1 : 1);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  /**
+   * Flip to the day either side.
+   *
+   * A supervisor clearing yesterday works a person's week, not one date, and
+   * going back to the summary between every card is the single most repeated
+   * motion on this screen. Guarded on `dirty` so a flip cannot silently discard
+   * an edit — the browser confirm is deliberate rather than a custom dialog,
+   * because it is the one interruption that must not be dismissable by accident.
+   */
+  function flipDay(delta: number) {
+    if (!date) return;
+    if (dirty && !window.confirm('This card has unsaved changes. Leave anyway?')) return;
+    navigate(`/time/card/${userId}/${addDays(date, delta)}`);
+  }
+
   if (loaded.loading) return <Loading what="timecard" />;
   if (loaded.error) return <Banner tone="error">{loaded.error}</Banner>;
-  if (!card) return <Empty>No timecard exists for that date.</Empty>;
+  if (!card) {
+    // Still offer the flip, so an empty day is a page you pass through rather
+    // than a dead end that sends you back to the summary.
+    return (
+      <>
+        <Toolbar>
+          <Button onClick={() => navigate('/time')}>← Payroll Summary</Button>
+          <Button onClick={() => flipDay(-1)} title="Previous day (Alt+←)">←</Button>
+          <span className="mono">{date}</span>
+          <Button onClick={() => flipDay(1)} title="Next day (Alt+→)">→</Button>
+        </Toolbar>
+        <Empty>No timecard exists for that date.</Empty>
+      </>
+    );
+  }
 
   return (
     <>
       <Toolbar>
         <Button onClick={() => navigate('/time')}>← Payroll Summary</Button>
+        <div className="daypager">
+          <Button onClick={() => flipDay(-1)} title="Previous day (Alt+←)" aria-label="Previous day">
+            ←
+          </Button>
+          <span className="daypager-date mono">{card.payrollDate}</span>
+          <Button onClick={() => flipDay(1)} title="Next day (Alt+→)" aria-label="Next day">
+            →
+          </Button>
+        </div>
         <div style={{ flex: 1 }} />
         <div className="stats">
           <Stat label="Regular" value={card.summary.formatted.regular} />
@@ -597,6 +670,7 @@ function TimecardEditor() {
         </div>
       </Toolbar>
 
+      <div className="card-split">
       <Card
         title={`${card.userName} — ${card.payrollDate}`}
         subtitle={`${card.employeeId} · shift ${card.shiftNo}`}
@@ -605,7 +679,7 @@ function TimecardEditor() {
             {!readOnly && (
               <Button
                 variant="primary"
-                onClick={save}
+                onClick={(e) => void save(e.currentTarget)}
                 disabled={!dirty || (!!decision?.postPayroll && !reason.trim())}
                 title={
                   decision?.postPayroll && !reason.trim()
@@ -617,7 +691,7 @@ function TimecardEditor() {
               </Button>
             )}
             {user?.isSupervisor && (
-              <Button onClick={() => approve(!card.approved)} disabled={card.inProgress}>
+              <Button onClick={(e) => void approve(!card.approved, e.currentTarget)} disabled={card.inProgress}>
                 {card.approved ? 'Remove approval' : 'Approve'}
               </Button>
             )}
@@ -755,19 +829,37 @@ function TimecardEditor() {
           </table>
         </div>
 
-        {!readOnly && (
-          <p className="muted keys">
-            <kbd>↑</kbd> <kbd>↓</kbd> move between rows · <kbd>Alt</kbd>+<kbd>↵</kbd> insert a row ·{' '}
-            <kbd>Alt</kbd>+<kbd>⌫</kbd> delete one · <kbd>Ctrl</kbd>+<kbd>↵</kbd> save
-          </p>
-        )}
+        <p className="muted keys">
+          {!readOnly && (
+            <>
+              <kbd>↑</kbd> <kbd>↓</kbd> move between rows · <kbd>Alt</kbd>+<kbd>↵</kbd> insert a row ·{' '}
+              <kbd>Alt</kbd>+<kbd>⌫</kbd> delete one · <kbd>Ctrl</kbd>+<kbd>↵</kbd> save ·{' '}
+            </>
+          )}
+          <kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd> previous and next day
+        </p>
 
         <Issues issues={[...saveIssues, ...card.issues]} />
       </Card>
 
-      <div className="grid-2">
-        <Card title="Payroll shift detail" tone="quiet">
-          <table aria-label="Timecard rows">
+      {/* The reference column. Sticky, so it stays beside the rows however far
+          down the card you are — the comparison is the job. */}
+      <aside className="card-aside">
+        <div className="aside-inner">
+          <Segmented
+            ariaLabel="What to show beside the rows"
+            size="small"
+            value={aside}
+            onChange={setAside}
+            options={[
+              { value: 'plan', label: 'Plan' },
+              { value: 'detail', label: 'Details' },
+            ]}
+          />
+
+        {aside === 'detail' && (
+        <Card tone="quiet">
+          <table aria-label="Payroll shift detail">
             <tbody>
               <tr>
                 <th>Payroll date</th>
@@ -804,8 +896,10 @@ function TimecardEditor() {
             </tbody>
           </table>
         </Card>
+        )}
 
-        <Card title="Scheduled shift" tone="quiet">
+        {aside === 'plan' && (
+        <Card tone="quiet">
           {loaded.data?.shifts.length === 0 && <Empty>Nothing scheduled on this date.</Empty>}
           {loaded.data?.shifts.map((shift) => (
             <div key={shift.shiftNo}>
@@ -826,6 +920,9 @@ function TimecardEditor() {
             </div>
           ))}
         </Card>
+        )}
+        </div>
+      </aside>
       </div>
     </>
   );

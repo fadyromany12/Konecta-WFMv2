@@ -7,6 +7,8 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { NotificationBell } from './components/Notifications';
 import { PulseLine } from './components/PulseLine';
 import { CommandPalette } from './components/CommandPalette';
+import { TravellingNav } from './components/TravellingNav';
+import { useCardSpotlight } from './lib/interaction';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { TimeAttendance } from './pages/TimeAttendance';
@@ -39,6 +41,9 @@ export function App() {
   const toggleGuide = useCallback(() => setGuideOpen((v) => !v), []);
   const togglePalette = useCallback(() => setPaletteOpen((v) => !v), []);
   const openGuide = useCallback(() => setGuideOpen(true), []);
+
+  // A light that follows the pointer across whichever card it is under.
+  useCardSpotlight();
 
   // The guide is reachable from anywhere with ?, not just the header button.
   useHotkey('?', toggleGuide);
@@ -107,18 +112,21 @@ export function App() {
         </button>
       </header>
 
-      <nav className="tabs">
+      <TravellingNav className="tabs" indicatorClassName="tabs-underline" ariaLabel="Sections">
         {tabs.map((tab, i) => (
           <NavLink
             key={tab.to}
             to={tab.to}
             style={{ '--i': i } as React.CSSProperties}
             className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}
+            // Read by CSS to reserve the *bold* width up front. See the note
+            // on `.tab::before`.
+            data-label={tab.label}
           >
             {tab.label}
           </NavLink>
         ))}
-      </nav>
+      </TravellingNav>
 
       {/* Keying on the tab restarts the entrance animation on navigation, so a
           new screen arrives rather than swapping in place. */}
@@ -195,12 +203,18 @@ function useHotkey(key: string, action: () => void) {
 
 export function SubTabs({ items }: { items: { to: string; label: string }[] }) {
   return (
-    <nav className="subtabs">
+    <TravellingNav className="subtabs" indicatorClassName="subtabs-pill" ariaLabel="Views">
       {items.map((item) => (
-        <NavLink key={item.to} to={item.to} className={({ isActive }) => `subtab ${isActive ? 'active' : ''}`} end>
+        <NavLink
+          key={item.to}
+          to={item.to}
+          className={({ isActive }) => `subtab ${isActive ? 'active' : ''}`}
+          data-label={item.label}
+          end
+        >
           {item.label}
         </NavLink>
       ))}
-    </nav>
+    </TravellingNav>
   );
 }
