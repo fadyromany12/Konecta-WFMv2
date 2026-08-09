@@ -21,6 +21,7 @@ import {
 import { intradaySnapshot } from '../services/intraday.js';
 import { accuracyFor, getActuals, saveActuals } from '../services/accuracy.js';
 import { absenceProfiles } from '../services/absencePatterns.js';
+import { rebalanceFor } from '../services/rebalance.js';
 import { TRIGGERS } from '../domain/bradford.js';
 import {
   autoSchedule,
@@ -126,6 +127,64 @@ planning.get(
       getForecast(projectId, date),
     ]);
     res.json({ ...result, projectId, forecast });
+  }),
+);
+
+// ------------------------------------------------------------- rebalance
+//
+// The live board says 15:00 is four short. This says what to do about it, in
+// the order a WFM analyst actually works in: move a break before buying an
+// hour, and say plainly when a gap cannot be closed at all.
+
+planning.get(
+  '/rebalance',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const projectId = await projectOf(req);
+    const userIds = await groupOf(req);
+    res.json(await rebalanceFor({ projectId, date, userIds }));
+  }),
+);
+
+/**
+ * Post the offer a recommendation asked for.
+ *
+ * Separate from the recommendation itself on purpose: the tool proposes and a
+ * supervisor decides. Auto-posting extra hours from a forecast would be
+ * spending money on an Erlang calculation nobody had looked at.
+ */
+planning.post(
+  '/rebalance/offer',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        project: z.string().optional(),
+        date: dateSchema,
+        startTime: timeSchema,
+        endTime: timeSchema,
+        slots: z.number().int().min(1).max(50),
+        note: z.string().max(400).optional(),
+      })
+      .parse(req.body);
+    if (body.endTime <= body.startTime) {
+      throw new HttpError(400, 'The offer ends before it starts.');
+    }
+    const projectId = await projectOf(req, body.project);
+    res.status(201).json(
+      await createOffer({
+        projectId,
+        date: body.date,
+        startTime: body.startTime,
+        endTime: body.endTime,
+        slots: body.slots,
+        note: body.note,
+        actorId: req.user!.id,
+      }),
+    );
   }),
 );
 

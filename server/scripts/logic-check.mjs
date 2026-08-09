@@ -732,6 +732,54 @@ const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${Y
 check('no Ramadan date is also a public holiday',
   ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
 
+console.log('=== INTRADAY THAT RECOMMENDS ===');
+const reb = (await call('GET',`/rebalance?date=${day(0)}`,OM)).body;
+check('rebalance answers for a day', Array.isArray(reb?.recommendations), JSON.stringify(reb)?.slice(0,140));
+check('it names who could take extra hours', Array.isArray(reb.candidates));
+check('every candidate is under the weekly ceiling',
+  reb.candidates.every((c) => c.weekHours <= 48 && c.headroom > 0));
+check('candidates are ordered by how much room they have',
+  reb.candidates.every((c, i) => i === 0 || reb.candidates[i-1].headroom >= c.headroom));
+check('there is a one-line summary', typeof reb.summary === 'string' && reb.summary.length > 0);
+check('every recommendation carries the gap it is about',
+  reb.recommendations.every((r) => r.gap && r.gap.from && r.gap.to));
+check('and a headline and a detail somebody can act on',
+  reb.recommendations.every((r) => r.headline?.length > 0 && r.detail?.length > 0));
+check('every recommendation is one of the three kinds',
+  reb.recommendations.every((r) => ['MOVE_BREAKS','OFFER_EXTRA_HOURS','UNFILLABLE'].includes(r.kind)));
+// The ordering is the point: free cover is proposed before money is spent.
+const kinds = reb.recommendations.map((r) => r.kind);
+for (const g of new Set(reb.recommendations.map((r) => r.gap.from))) {
+  const forGap = reb.recommendations.filter((r) => r.gap.from === g).map((r) => r.kind);
+  const firstBuy = forGap.indexOf('OFFER_EXTRA_HOURS');
+  const lastMove = forGap.lastIndexOf('MOVE_BREAKS');
+  check(`free cover is proposed before extra hours at ${g}`,
+    firstBuy === -1 || lastMove === -1 || lastMove < firstBuy, forGap.join('>'));
+}
+check('an unfillable gap is only ever last for its gap',
+  reb.recommendations.every((r, i) =>
+    r.kind !== 'UNFILLABLE' ||
+    !reb.recommendations.slice(i+1).some((n) => n.gap.from === r.gap.from)));
+check('an advisor cannot read the rebalance plan', (await call('GET','/rebalance',ADV)).status === 403);
+
+// Nobody rostered today is offered extra hours on top of the shift they are
+// already working -- the fastest way to lose trust in a suggestion.
+const todayRostered = (await call('GET',`/schedules/6?start=${day(0)}&end=${day(0)}`,OM)).body;
+if (todayRostered?.days?.[0]?.shifts?.length > 0) {
+  check('somebody already rostered today is not offered extra hours',
+    !reb.candidates.some((c) => c.userId === 6));
+} else check('user 6 is off today, so the double-booking check is skipped', true);
+
+// Posting the offer is a separate, deliberate act.
+const offer = await call('POST','/rebalance/offer',OM,{date:day(2),startTime:'15:00',endTime:'17:00',slots:2,note:'check'});
+check('a recommendation can be turned into a real offer', offer.status === 201, `status ${offer.status}`);
+check('a backwards offer window is refused',
+  (await call('POST','/rebalance/offer',OM,{date:day(2),startTime:'17:00',endTime:'15:00',slots:1})).status === 400);
+check('an advisor cannot post an extra hours offer',
+  (await call('POST','/rebalance/offer',ADV,{date:day(2),startTime:'15:00',endTime:'17:00',slots:1})).status === 403);
+check('the posted offer shows up for advisors to bid on',
+  ((await call('GET',`/extra-hours?date=${day(2)}`,ADV)).body?.offers ?? []).length > 0);
+
 console.log('=== ABSENCE PATTERNS ===');
 const pat = (await call('GET','/absence/patterns',TL)).body;
 check('absence patterns load for a team', Array.isArray(pat?.profiles), JSON.stringify(pat)?.slice(0,120));
