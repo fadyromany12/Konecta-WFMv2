@@ -262,6 +262,29 @@ CREATE TABLE IF NOT EXISTS forecast_intervals (
 );
 CREATE INDEX IF NOT EXISTS idx_forecast_project_date ON forecast_intervals(project_id, date);
 
+-- What actually arrived. A separate table rather than two more columns on
+-- forecast_intervals, because an actual is a different fact recorded at a
+-- different time by a different system: the forecast is a plan somebody typed
+-- last month, the actual is a measurement the telephony platform emits after
+-- the interval closes. Keeping them apart means an actual can be recorded for
+-- an interval nobody forecast -- which is itself worth knowing, and is exactly
+-- the case a shared row would silently hide.
+CREATE TABLE IF NOT EXISTS actual_intervals (
+  id          {{ID}},
+  project_id  TEXT NOT NULL REFERENCES projects(activity_id) ON DELETE CASCADE,
+  date        TEXT NOT NULL,
+  start_time  TEXT NOT NULL,
+  volume      REAL NOT NULL DEFAULT 0,
+  aht_seconds INTEGER,
+  -- Where the number came from. A hand-typed correction and a feed from the
+  -- switch should not look identical when somebody is arguing about accuracy.
+  source      TEXT NOT NULL DEFAULT 'MANUAL',
+  recorded_by INTEGER REFERENCES users(id),
+  updated_at  TEXT NOT NULL DEFAULT {{NOW}},
+  UNIQUE (project_id, date, start_time)
+);
+CREATE INDEX IF NOT EXISTS idx_actual_project_date ON actual_intervals(project_id, date);
+
 -- Service level promise and planning assumptions, per project.
 CREATE TABLE IF NOT EXISTS forecast_settings (
   project_id     TEXT PRIMARY KEY REFERENCES projects(activity_id) ON DELETE CASCADE,

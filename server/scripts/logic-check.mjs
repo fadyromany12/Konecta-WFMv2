@@ -732,6 +732,67 @@ const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${Y
 check('no Ramadan date is also a public holiday',
   ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
 
+console.log('=== FORECAST ACCURACY ===');
+const acc = (await call('GET',`/accuracy?start=${day(-14)}&end=${day(-1)}`,OM)).body;
+check('accuracy reports over a period', typeof acc?.measured === 'number', JSON.stringify(acc)?.slice(0,120));
+check('something was actually measured', acc.measured > 0, `measured ${acc?.measured}`);
+check('WAPE is a fraction, not a percentage', acc.wape >= 0 && acc.wape <= 2, `${acc?.wape}`);
+// The seed makes weekdays arrive about 7% above forecast, so the bias must be
+// positive and visible — a report that averaged it away would be useless.
+check('the seeded bias is found, and signed', acc.bias > 0.02, `bias ${acc?.bias}`);
+// interpret() only names a direction once the bias is worth correcting; below
+// that it says so is noise. Either is a correct reading, and asserting on one
+// of them would be asserting on the seed rather than on the code.
+check('the bias is always given a reading, one way or the other',
+  /low overall|high overall|noise/.test((acc.notes ?? []).join(' ')), (acc.notes ?? []).join(' | '));
+check('the weighted error is the headline note', (acc.notes ?? [])[0]?.includes('Weighted error'));
+check('handling time bias is separate from volume', Math.abs(acc.ahtBiasSeconds - 20) < 1, `${acc?.ahtBiasSeconds}`);
+check('the worst intervals are listed', Array.isArray(acc.worst) && acc.worst.length > 0);
+check('worst intervals are ranked by calls', acc.worst.every((w, i) =>
+  i === 0 || Math.abs(acc.worst[i-1].error) >= Math.abs(w.error)));
+check('there is a per-day breakdown', Array.isArray(acc.byDay) && acc.byDay.length > 0);
+// WAPE and MAPE are not ordered — that was a wrong assumption. WAPE weights by
+// volume, so it runs *below* MAPE when the bad intervals are quiet ones and
+// *above* it when they are busy ones. The seeded spike is on a busy Tuesday
+// interval, so here it runs above. What must hold is that they are different
+// measures and both are finite.
+check('WAPE and MAPE are both real numbers', Number.isFinite(acc.wape) && Number.isFinite(acc.mape));
+check('WAPE differs from MAPE, because it weights by volume',
+  Math.abs(acc.wape - acc.mape) > 1e-6, `wape ${acc?.wape} mape ${acc?.mape}`);
+check('an advisor cannot read forecast accuracy', (await call('GET','/accuracy',ADV)).status === 403);
+check('a backwards range is refused', (await call('GET',`/accuracy?start=${day(0)}&end=${day(-5)}`,OM)).status === 400);
+
+// The future has not arrived, so it cannot have been measured.
+const future = (await call('GET',`/accuracy?start=${day(3)}&end=${day(6)}`,OM)).body;
+check('a period in the future measures nothing', future.measured === 0, `measured ${future?.measured}`);
+check('and says so rather than reporting zero error',
+  (future.notes ?? []).join(' ').includes('No actual volume'));
+check('nulls rather than NaN when nothing is measurable', future.wape === null && future.bias === null);
+
+// Round-trip a correction.
+const actualsDate = day(-2);
+const actualsBefore = (await call('GET',`/actuals?date=${actualsDate}`,OM)).body?.actuals ?? [];
+check('actuals can be read back for a day', actualsBefore.length > 0, `${actualsBefore.length} intervals`);
+const put = await call('PUT','/actuals',OM,{date:actualsDate,source:'CHECK',rows:[
+  {startTime:'09:00',volume:999,ahtSeconds:300},
+  {startTime:'09:30',volume:1,ahtSeconds:300},
+]});
+check('actuals can be corrected', put.status === 200, `status ${put.status}`);
+const actualsAfter = (await call('GET',`/actuals?date=${actualsDate}`,OM)).body?.actuals ?? [];
+// Replacing the day rather than merging is the point: a corrected upload that
+// omits an interval must not leave the old number sitting there.
+check('a correction replaces the day rather than merging into it', actualsAfter.length === 2, `${actualsAfter.length} left`);
+check('the corrected number is what comes back', actualsAfter.find((a)=>a.startTime==='09:00')?.volume === 999);
+check('an advisor cannot record actuals', (await call('PUT','/actuals',ADV,{date:actualsDate,rows:[]})).status === 403);
+
+// Volume in an interval nobody forecast is error, not absence of data —
+// otherwise a planner improves their score by forecasting fewer intervals.
+const oddDate = day(-2);
+await call('PUT','/actuals',OM,{date:oddDate,rows:[{startTime:'02:30',volume:500,ahtSeconds:240}]});
+const withOrphan = (await call('GET',`/accuracy?start=${oddDate}&end=${oddDate}`,OM)).body;
+check('an unforecast interval still counts as error',
+  withOrphan.actualTotal >= 500, `actualTotal ${withOrphan?.actualTotal}`);
+
 console.log('=== JOINERS, MOVERS, LEAVERS ===');
 // A unique suffix per run, so this can be run twice against the same database
 // without colliding on the employee ID or email unique constraints.

@@ -117,6 +117,7 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
         'extra_hours_bids',
         'extra_hours_offers',
         'shift_swaps',
+        'actual_intervals',
         'forecast_intervals',
         'forecast_settings',
         'audit_log',
@@ -789,6 +790,40 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
       'forecast_intervals',
       ['project_id', 'date', 'start_time', 'volume', 'aht_seconds'],
       intervals,
+    );
+
+    // What actually arrived, for the days that have already happened. Without
+    // this the accuracy screen is correct and empty, which demonstrates
+    // nothing — and the whole point of the loop is that somebody looks at the
+    // number and changes the next forecast.
+    //
+    // Shaped rather than randomised: the forecast runs about 7% low on
+    // weekdays and handling time about 20 seconds long, so the report has a
+    // real bias to find and a planner has something to correct. A couple of
+    // intervals are badly out so the "worst intervals" list is not empty.
+    const actuals: unknown[][] = [];
+    for (const row of intervals) {
+      const [, date, startTime, volume, aht] = row as [string, string, string, number, number];
+      if (date >= today) continue; // the future has not arrived yet
+      const dow = new Date(date + 'T00:00:00Z').getUTCDay();
+      const drift = dow === 5 || dow === 6 ? 0.98 : 1.07;
+      // A deterministic wobble, so two runs of the seed produce the same
+      // numbers and a check can assert against them.
+      const wobble = 1 + (((date.charCodeAt(9) + startTime.charCodeAt(1)) % 9) - 4) / 100;
+      const spike = startTime === '11:00' && dow === 2 ? 1.6 : 1;
+      actuals.push([
+        'A123',
+        date,
+        startTime,
+        Math.max(0, Math.round(volume * drift * wobble * spike)),
+        aht + 20,
+        'SEED',
+      ]);
+    }
+    await insertMany(
+      'actual_intervals',
+      ['project_id', 'date', 'start_time', 'volume', 'aht_seconds', 'source'],
+      actuals,
     );
   });
 

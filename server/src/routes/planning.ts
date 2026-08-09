@@ -19,6 +19,7 @@ import {
   releaseAlert,
 } from '../services/planning.js';
 import { intradaySnapshot } from '../services/intraday.js';
+import { accuracyFor, getActuals, saveActuals } from '../services/accuracy.js';
 import {
   autoSchedule,
   coverageFor,
@@ -123,6 +124,66 @@ planning.get(
       getForecast(projectId, date),
     ]);
     res.json({ ...result, projectId, forecast });
+  }),
+);
+
+// ------------------------------------------------------- closing the loop
+//
+// The forecast is what somebody expected. These record what arrived and say
+// how far apart the two were.
+
+planning.get(
+  '/actuals',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const date = dateSchema.parse(req.query.date ?? todayStr());
+    const projectId = await projectOf(req);
+    res.json({ projectId, date, actuals: await getActuals(projectId, date) });
+  }),
+);
+
+planning.put(
+  '/actuals',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        project: z.string().optional(),
+        date: dateSchema,
+        source: z.string().optional(),
+        rows: z.array(
+          z.object({
+            startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+            volume: z.number().min(0),
+            ahtSeconds: z.number().int().min(0).nullable().default(null),
+          }),
+        ),
+      })
+      .parse(req.body);
+    const projectId = await projectOf(req, body.project);
+    const out = await saveActuals({
+      projectId,
+      date: body.date,
+      rows: body.rows,
+      actorId: req.user!.id,
+      source: body.source,
+    });
+    res.json({ ...out, projectId, date: body.date });
+  }),
+);
+
+planning.get(
+  '/accuracy',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const end = dateSchema.parse(req.query.end ?? todayStr());
+    const start = dateSchema.parse(req.query.start ?? addDays(end, -27));
+    if (start > end) throw new HttpError(400, 'The start date is after the end date.');
+    const projectId = await projectOf(req);
+    res.json(await accuracyFor({ projectId, start, end }));
   }),
 );
 
