@@ -315,3 +315,100 @@ export interface AdherenceResponse {
   timecard: Timecard | null;
   shifts: ScheduleShift[];
 }
+
+// ------------------------------------------------- closing the forecast loop
+
+export interface IntervalError {
+  date: string;
+  startTime: string;
+  forecastVolume: number;
+  actualVolume: number;
+  error: number;
+  errorPct: number | null;
+}
+
+export interface AccuracyReport {
+  projectId: string;
+  start: string;
+  end: string;
+  measured: number;
+  unmeasured: number;
+  forecastTotal: number;
+  actualTotal: number;
+  /** All 0-1, and null when there is nothing to measure. */
+  mape: number | null;
+  wape: number | null;
+  /** Signed. Positive means the forecast was low and the floor was short. */
+  bias: number | null;
+  mae: number | null;
+  ahtBiasSeconds: number | null;
+  worst: IntervalError[];
+  notes: string[];
+  byDay: { date: string; forecast: number; actual: number; wape: number | null; bias: number | null }[];
+}
+
+// ----------------------------------------------------------------- rebalance
+
+export interface Gap {
+  from: string;
+  to: string;
+  intervals: number;
+  shortBy: number;
+  agentIntervals: number;
+  worstServiceLevel: number;
+}
+
+export interface Recommendation {
+  kind: 'MOVE_BREAKS' | 'OFFER_EXTRA_HOURS' | 'UNFILLABLE';
+  gap: Gap;
+  covers: number;
+  people: number;
+  source?: { from: string; to: string; agentIntervals: number };
+  headline: string;
+  detail: string;
+}
+
+export interface RebalancePlan {
+  date: string;
+  projectId: string;
+  recommendations: Recommendation[];
+  candidates: { userId: number; name: string; employeeId: string; weekHours: number; headroom: number }[];
+  summary: string;
+}
+
+// ---------------------------------------------------------- absence patterns
+
+export type TriggerBand = 'NONE' | 'REVIEW' | 'CONCERN' | 'FORMAL';
+
+export interface AbsenceProfile {
+  userId: number;
+  name: string;
+  employeeId: string;
+  managerName: string | null;
+  spells: number;
+  days: number;
+  score: number;
+  band: TriggerBand;
+  bandLabel: string;
+  summary: string;
+  daysSinceLast: number | null;
+  spellDetail: { start: string; end: string; days: number; codes: string[] }[];
+}
+
+export interface AbsencePatterns {
+  start: string;
+  end: string;
+  profiles: AbsenceProfile[];
+  triggers: { band: TriggerBand; from: number; label: string }[];
+}
+
+// ------------------------------------------------------- prayer and Ramadan
+
+export interface PrayerTimesResponse {
+  date: string;
+  times: { name: string; at: string }[];
+  labels: Record<string, string>;
+  isRamadan: boolean;
+  normHours: number;
+  graceMinutes: number;
+}

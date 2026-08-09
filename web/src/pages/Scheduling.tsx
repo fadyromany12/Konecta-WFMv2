@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
 import { SubTabs } from '../App';
+import { Rebalance } from './Rebalance';
+import { Accuracy } from './Accuracy';
 import { api, type Person, type ScheduleShift } from '../api';
 import { useAsync, useSession } from '../state';
 import { useToast } from '../components/Toast';
@@ -32,6 +34,8 @@ export function Scheduling() {
           { to: '/scheduling/week', label: 'Team Week' },
           { to: '/scheduling/group', label: 'Group Schedule Exceptions' },
           { to: '/scheduling/forecast', label: 'Forecast & Coverage' },
+          { to: '/scheduling/rebalance', label: 'What To Do Now' },
+          { to: '/scheduling/accuracy', label: 'Forecast Accuracy' },
           { to: '/scheduling/volumes', label: 'Enter Forecast' },
           { to: '/scheduling/skills', label: 'Multi-Skill' },
         ]}
@@ -41,6 +45,8 @@ export function Scheduling() {
         <Route path="week" element={<TeamWeek />} />
         <Route path="group" element={<GroupExceptions />} />
         <Route path="forecast" element={<Planning />} />
+        <Route path="rebalance" element={<Rebalance />} />
+        <Route path="accuracy" element={<Accuracy />} />
         <Route path="volumes" element={<ForecastEntry />} />
         <Route path="skills" element={<MultiSkill />} />
       </Routes>

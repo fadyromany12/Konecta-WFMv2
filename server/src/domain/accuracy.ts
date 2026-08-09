@@ -155,7 +155,13 @@ export function interpret(result: AccuracyResult): string[] {
         : `The forecast ran ${pct(-result.bias)} high overall, so the floor was staffed for work that did not come.`,
     );
   } else if (result.bias !== null) {
-    notes.push('No consistent direction to the error — what is left is noise rather than a correction.');
+    // The figure is quoted even when it is small, because the screen shows it
+    // next to this sentence and "no consistent direction" beside a +4.9% tile
+    // reads as a contradiction rather than as a judgement about size.
+    notes.push(
+      `The error has no strong direction (${result.bias > 0 ? '+' : ''}${pct(result.bias)}) — ` +
+        'small enough to be noise rather than something a single correction would fix.',
+    );
   }
 
   if (result.ahtBiasSeconds !== null && Math.abs(result.ahtBiasSeconds) >= 10) {
