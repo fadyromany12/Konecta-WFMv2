@@ -7,7 +7,8 @@ import { planning } from './routes/planning.js';
 import { events } from './routes/events.js';
 import { errorHandler, notFound } from './middleware/errors.js';
 import { PRODUCT } from './domain/reference.js';
-import { db, ensureSchema, storageDescription, USING_POSTGRES } from './db/index.js';
+import { db, ensureSchema, storageDescription, ENDPOINT_KIND, USING_POSTGRES } from './db/index.js';
+import { diagnose } from './db/diagnose.js';
 import { seed } from './db/seed.js';
 
 /**
@@ -108,11 +109,15 @@ function readyGate(_req: Request, res: Response, next: NextFunction): void {
     () => next(),
     (err) => {
       console.error('Storage is not ready:', err);
-      res.status(503).json({
-        error: USING_POSTGRES
-          ? 'The database is not reachable. Check PULSE_DATABASE_URL and that the database is awake.'
-          : 'The database could not be opened.',
-      });
+      if (!USING_POSTGRES) {
+        res.status(503).json({ error: 'The database could not be opened.' });
+        return;
+      }
+      // Name the cause. The person looking at the sign-in screen is usually
+      // not the person who can read the platform logs, and one message that
+      // fits every possible failure sends them to the wrong one.
+      const { reason, fix, code } = diagnose(err, ENDPOINT_KIND);
+      res.status(503).json({ error: `${reason} ${fix}`, reason, fix, code });
     },
   );
 }

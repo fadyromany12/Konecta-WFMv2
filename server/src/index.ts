@@ -1,6 +1,7 @@
 import { createApp, ready } from './app.js';
 import { PRODUCT } from './domain/reference.js';
-import { storageDescription } from './db/index.js';
+import { ENDPOINT_KIND, storageDescription } from './db/index.js';
+import { diagnose } from './db/diagnose.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 
@@ -15,6 +16,12 @@ ready()
     });
   })
   .catch((err) => {
-    console.error(`${PRODUCT.name} could not start:`, err);
+    // The same diagnosis the 503 gives, because a self-hosted run fails here
+    // instead — it refuses to listen at all rather than serving an error page,
+    // so without this the better message would only ever be seen on Vercel.
+    const { reason, fix, code } = diagnose(err, ENDPOINT_KIND);
+    console.error(`${PRODUCT.name} could not start: ${reason}`);
+    console.error(`  ${fix}`);
+    if (code) console.error(`  (driver code ${code})`);
     process.exit(1);
   });

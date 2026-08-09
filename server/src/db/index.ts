@@ -1,3 +1,4 @@
+import { endpointKind, type EndpointKind } from './diagnose.js';
 import { schemaFor } from './schema.js';
 import { createSqliteDatabase } from './sqlite.js';
 import { createPostgresDatabase } from './postgres.js';
@@ -65,6 +66,16 @@ if (IS_MEMORY && process.env.VERCEL) {
 export const db: Database = USING_POSTGRES
   ? createPostgresDatabase(postgresUrl!)
   : createSqliteDatabase(sqliteFile);
+
+/**
+ * What kind of endpoint we were pointed at, for the failure diagnosis.
+ *
+ * Computed here because this is the only module that knows the connection
+ * string, and deliberately reduced to a category rather than a hostname: a
+ * direct Supabase host carries the project reference, and this ends up in a
+ * response served before anybody has signed in.
+ */
+export const ENDPOINT_KIND: EndpointKind = endpointKind(postgresUrl);
 
 /** Human description of where the data is, for the health endpoint and logs. */
 export function storageDescription(): string {
