@@ -18,6 +18,7 @@ import {
 } from '../components/ui';
 import { addDays, durationBetween, today, toMinutes } from '../lib/time';
 import { Analytics } from './Analytics';
+import { AbsencePatterns } from './AbsencePatterns';
 
 export function Reports() {
   const { user } = useSession();
@@ -26,6 +27,7 @@ export function Reports() {
     items.push(
       { to: '/reports/analytics', label: 'Analytics' },
       { to: '/reports/exceptions', label: 'Non-Worked Exceptions' },
+      { to: '/reports/absence', label: 'Absence Patterns' },
       { to: '/reports/query', label: 'Query Tool' },
     );
   }
@@ -36,6 +38,7 @@ export function Reports() {
         <Route index element={<PulseReport />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="exceptions" element={<ExceptionReport />} />
+        <Route path="absence" element={<AbsencePatterns />} />
         <Route path="query" element={<QueryTool />} />
       </Routes>
     </>

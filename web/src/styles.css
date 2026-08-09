@@ -4931,3 +4931,271 @@ a.who:hover .who-name { color: var(--accent); }
 [dir='rtl'] .toast strong {
   unicode-bidi: plaintext;
 }
+
+/* ------------------------------------------- the operations centre screens */
+
+/*
+ * These three screens all answer "what should I do", so they share a shape:
+ * a plain-English reading first, the figures underneath it as evidence, and
+ * anything actionable as a card with the action on it. The visual weight goes
+ * on severity rather than on chrome — a gap that cannot be covered should be
+ * findable without reading.
+ */
+
+.ops-summary {
+  color: var(--muted);
+  font-size: var(--step--1);
+  margin-inline-start: auto;
+}
+
+.ops-section { margin-block: 1.6rem; }
+
+.ops-section-head {
+  margin-bottom: 0.8rem;
+}
+.ops-section-head h3 {
+  margin: 0 0 0.2rem;
+  font-size: var(--step-0);
+  letter-spacing: -0.01em;
+}
+.ops-section-head p { margin: 0; font-size: var(--step--1); max-width: 62ch; }
+
+.ops-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
+  gap: 0.9rem;
+}
+
+/* A severity stripe on the inline start edge, so the kind of action reads
+   before the words do. */
+.ops-action {
+  position: relative;
+  padding: 1rem 1.1rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--glass);
+  overflow: hidden;
+}
+.ops-action::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: var(--text-faint);
+}
+.ops-action-move-breaks::before { background: var(--good); }
+.ops-action-offer-extra-hours::before { background: var(--warn); }
+.ops-action-unfillable::before { background: var(--error); }
+
+.ops-action header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.ops-action h4 {
+  margin: 0;
+  font-size: var(--step-0);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.ops-action p {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+  font-size: var(--step--1);
+}
+
+/* A row of small labelled numbers. Tabular so they line up between cards. */
+.ops-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+  margin: 0 0 0.8rem;
+}
+.ops-facts div { margin: 0; }
+.ops-facts dt {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.ops-facts dd {
+  margin: 0.1rem 0 0;
+  font-size: var(--step-1);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.ops-clear {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.ops-clear h3 { margin: 0 0 0.15rem; font-size: var(--step-1); }
+.ops-clear p { margin: 0; max-width: 52ch; }
+.ops-clear-mark {
+  flex: none;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  border: 2px solid var(--good);
+}
+
+.candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 0.55rem 1rem;
+}
+.candidate-name { font-weight: 600; font-size: var(--step--1); }
+
+/* --------------------------------------------------------------- accuracy */
+
+/* The plain reading, above the numbers. */
+.reading {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+.reading li { font-size: var(--step-0); }
+
+.figure {
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--glass);
+  border-block-start: 3px solid var(--text-faint);
+}
+.figure-good { border-block-start-color: var(--good); }
+.figure-warn { border-block-start-color: var(--warn); }
+.figure-bad { border-block-start-color: var(--error); }
+
+.figure-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.figure-value {
+  font-size: var(--step-3);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-block: 0.15rem 0.3rem;
+}
+.figure-note {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.num { text-align: end; }
+/* Signed error, coloured by which way it hurt: short is the expensive one. */
+.delta-short { color: var(--error); }
+.delta-over { color: var(--muted); }
+
+.daybars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  height: 9rem;
+  overflow-x: auto;
+  padding-block-end: 0.2rem;
+}
+.daybar { display: grid; gap: 0.3rem; justify-items: center; flex: none; }
+.daybar-pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 7rem;
+}
+.daybar-forecast,
+.daybar-actual {
+  width: 9px;
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+}
+.daybar-forecast { background: color-mix(in srgb, var(--k-periwinkle) 55%, transparent); }
+.daybar-actual { background: var(--k-cyan); }
+.daybar-label {
+  font-size: 0.66rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.legend { display: flex; align-items: center; gap: 0.4rem; margin-block-start: 0.6rem; }
+.swatch { width: 0.7rem; height: 0.7rem; border-radius: 3px; display: inline-block; }
+.swatch-forecast { background: color-mix(in srgb, var(--k-periwinkle) 55%, transparent); }
+.swatch-actual { background: var(--k-cyan); margin-inline-start: 0.7rem; }
+
+/* -------------------------------------------------------- absence patterns */
+
+.pattern-list { display: grid; gap: 0.8rem; }
+
+.pattern {
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--glass-sunken);
+}
+.pattern-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+.pattern-name { font-weight: 600; }
+/* The words carry the meaning, so they get the size, not the score. */
+.pattern-summary {
+  margin: 0 0 0.7rem;
+  font-size: var(--step-0);
+  max-width: 70ch;
+}
+
+.spells { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.spell {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  color: var(--muted);
+}
+
+.trigger-bands {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.6rem;
+}
+.trigger {
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  border-inline-start: 3px solid var(--text-faint);
+}
+.trigger-review { border-inline-start-color: var(--warn); }
+.trigger-concern { border-inline-start-color: var(--warn); }
+.trigger-formal { border-inline-start-color: var(--error); }
+.trigger-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  font-size: var(--step-0);
+}
+.trigger-label { font-size: 0.76rem; color: var(--muted); }
+
+/* Where one gap is covered from several quieter stretches, each source is a
+   line rather than a card of its own. */
+.ops-sources {
+  margin: 0 0 0.8rem;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 0.2rem;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
