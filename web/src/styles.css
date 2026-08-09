@@ -227,7 +227,7 @@ html[data-theme='light'] body {
 .aurora span:nth-child(1) {
   width: 62vmax;
   height: 62vmax;
-  left: -6vmax;
+  inset-inline-start: -6vmax;
   top: -12vmax;
   background: radial-gradient(circle at 30% 30%, var(--k-indigo), transparent 62%);
 }
@@ -235,7 +235,7 @@ html[data-theme='light'] body {
 .aurora span:nth-child(2) {
   width: 54vmax;
   height: 54vmax;
-  right: -8vmax;
+  inset-inline-end: -8vmax;
   top: -6vmax;
   background: radial-gradient(circle at 60% 40%, var(--k-cyan), transparent 60%);
   animation-duration: 45s;
@@ -246,7 +246,7 @@ html[data-theme='light'] body {
 .aurora span:nth-child(3) {
   width: 70vmax;
   height: 70vmax;
-  left: 20vmax;
+  inset-inline-start: 20vmax;
   bottom: -34vmax;
   background: radial-gradient(circle at 50% 50%, var(--k-navy), transparent 65%);
   animation-duration: 52s;
@@ -394,7 +394,7 @@ html[data-theme='light'] .brand-mark span {
 }
 
 .who {
-  text-align: right;
+  text-align: end;
   line-height: 1.28;
 }
 
@@ -874,7 +874,7 @@ table {
 }
 
 th {
-  text-align: left;
+  text-align: start;
   font-weight: 640;
   font-size: 0.68rem;
   text-transform: uppercase;
@@ -929,7 +929,7 @@ tr.selected {
 }
 
 .right {
-  text-align: right;
+  text-align: end;
 }
 
 .nowrap {
@@ -947,7 +947,7 @@ tr.selected {
   font-weight: 500;
   border: 1px solid var(--hairline);
   background: var(--glass);
-  margin-right: 0.22rem;
+  margin-inline-end: 0.22rem;
   white-space: nowrap;
   transition: transform 160ms var(--ease);
 }
@@ -1039,7 +1039,7 @@ html[data-theme='light'] .chip-warn {
   font-size: 0.82rem;
   padding: 0.42rem 0.6rem;
   border-radius: var(--radius-sm);
-  border-left: 3px solid;
+  border-inline-start: 3px solid;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   animation: rise 360ms var(--ease) both;
@@ -1190,7 +1190,7 @@ html[data-theme='light'] .clock-time {
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 50%;
-  margin-right: 0.4rem;
+  margin-inline-end: 0.4rem;
   vertical-align: middle;
 }
 
@@ -1300,7 +1300,7 @@ html[data-theme='light'] .clock-time {
 .stamp-date {
   color: var(--warn);
   font-size: 0.66rem;
-  margin-left: 0.32rem;
+  margin-inline-start: 0.32rem;
 }
 
 @media (prefers-color-scheme: light) {
@@ -1366,7 +1366,7 @@ html[data-theme='light'] .stamp-date {
   font: inherit;
   font-family: var(--mono);
   padding: 0;
-  text-align: left;
+  text-align: start;
   transition: opacity 160ms var(--ease-soft);
 }
 
@@ -1504,7 +1504,7 @@ html[data-theme='light'] .stamp-date {
 
 .chart-y {
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   top: 0;
   height: calc(100% - 1.6rem);
   width: 2.4rem;
@@ -1628,7 +1628,7 @@ html[data-theme='light'] .stamp-date {
 }
 
 .barlist-value {
-  text-align: right;
+  text-align: end;
   color: var(--text-dim);
   font-size: 0.78rem;
 }
@@ -1728,33 +1728,33 @@ html[data-theme='light'] .stamp-date {
 
 /* The left edge carries the state, so the board scans by colour. */
 .board-ON_PHONE {
-  border-left: 3px solid var(--good);
+  border-inline-start: 3px solid var(--good);
 }
 .board-OTHER_WORK {
-  border-left: 3px solid var(--k-periwinkle);
+  border-inline-start: 3px solid var(--k-periwinkle);
 }
 .board-BREAK,
 .board-LUNCH {
-  border-left: 3px solid var(--k-cyan);
+  border-inline-start: 3px solid var(--k-cyan);
 }
 .board-NOT_CLOCKED_ON {
-  border-left: 3px solid var(--text-faint);
+  border-inline-start: 3px solid var(--text-faint);
 }
 .board-LATE,
 .board-CLOCKED_OFF_EARLY {
-  border-left: 3px solid var(--error);
+  border-inline-start: 3px solid var(--error);
 }
 
 /* A no-show is not a louder version of late — it is a different problem, and
    the supervisor's next move is to cover the shift rather than send a message.
    Filled rather than outlined, so it separates at a glance on a busy board. */
 .board-NO_SHOW {
-  border-left: 3px solid var(--error);
+  border-inline-start: 3px solid var(--error);
   background: color-mix(in oklab, var(--error) 16%, transparent);
 }
 .board-OFF_SHIFT {
   opacity: 0.42;
-  border-left: 3px solid transparent;
+  border-inline-start: 3px solid transparent;
 }
 
 .board-name {
@@ -1839,7 +1839,7 @@ html[data-theme='light'] .stamp-date {
   height: 0.45rem;
   border-radius: 50%;
   background: var(--good);
-  margin-right: 0.4rem;
+  margin-inline-end: 0.4rem;
   animation: pulse 2.4s var(--ease-soft) infinite;
 }
 
@@ -2026,14 +2026,14 @@ textarea,
 .guide {
   position: fixed;
   top: 0;
-  right: 0;
+  inset-inline-end: 0;
   bottom: 0;
   z-index: 61;
   width: min(30rem, 100vw);
   display: flex;
   flex-direction: column;
   background: var(--glass-strong);
-  border-left: 1px solid var(--hairline);
+  border-inline-start: 1px solid var(--hairline);
   backdrop-filter: blur(28px) saturate(160%);
   -webkit-backdrop-filter: blur(28px) saturate(160%);
   box-shadow: var(--elev-3);
@@ -2095,7 +2095,7 @@ textarea,
 
 .guide-steps {
   margin: 0;
-  padding-left: 1.1rem;
+  padding-inline-start: 1.1rem;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -2149,7 +2149,7 @@ textarea,
 
 .guide-can ul {
   margin: 0;
-  padding-left: 1rem;
+  padding-inline-start: 1rem;
   font-size: 0.78rem;
   line-height: 1.45;
   color: var(--text-dim);
@@ -2273,7 +2273,7 @@ kbd {
 
 .toasts {
   position: fixed;
-  right: 1.1rem;
+  inset-inline-end: 1.1rem;
   bottom: 1.1rem;
   z-index: 80;
   display: flex;
@@ -2583,7 +2583,7 @@ kbd {
   color: var(--text);
   font-size: 0.86rem;
   font-family: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-soft);
 }
@@ -2645,7 +2645,7 @@ kbd {
 .bell-count {
   position: absolute;
   top: -0.25rem;
-  right: -0.25rem;
+  inset-inline-end: -0.25rem;
   min-width: 1rem;
   padding: 0 0.2rem;
   border-radius: 999px;
@@ -2662,7 +2662,7 @@ kbd {
 .bell-live {
   position: absolute;
   bottom: -0.1rem;
-  left: -0.1rem;
+  inset-inline-start: -0.1rem;
   width: 0.4rem;
   height: 0.4rem;
   border-radius: 50%;
@@ -2679,7 +2679,7 @@ kbd {
 .notif-panel {
   position: absolute;
   top: calc(100% + 0.6rem);
-  right: 0;
+  inset-inline-end: 0;
   z-index: 65;
   width: min(24rem, calc(100vw - 2rem));
   max-height: 26rem;
@@ -2717,10 +2717,10 @@ kbd {
 .notif {
   display: block;
   width: 100%;
-  text-align: left;
+  text-align: start;
   padding: 0.6rem 0.65rem;
   border: 0;
-  border-left: 2px solid transparent;
+  border-inline-start: 2px solid transparent;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
@@ -2737,11 +2737,11 @@ kbd {
 
 .notif-unread {
   background: color-mix(in oklab, var(--k-indigo) 14%, transparent);
-  border-left-color: var(--accent);
+  border-inline-start-color: var(--accent);
 }
 
 .notif-warn.notif-unread {
-  border-left-color: var(--warn);
+  border-inline-start-color: var(--warn);
 }
 
 .notif-top {
@@ -2804,7 +2804,7 @@ kbd {
   }
 
   .toasts {
-    left: 1.1rem;
+    inset-inline-start: 1.1rem;
     width: auto;
   }
 }
@@ -2919,7 +2919,7 @@ html[data-theme='light'] .guide-scrim {
 .pulseline {
   width: 4.5rem;
   height: 1.4rem;
-  margin-left: 0.1rem;
+  margin-inline-start: 0.1rem;
   overflow: hidden;
   mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
@@ -3351,7 +3351,7 @@ html[data-theme='light'] .guide-role-note h3 {
 
 .num-input {
   width: 5.5rem;
-  text-align: right;
+  text-align: end;
   font-family: var(--mono);
 }
 
@@ -3490,7 +3490,7 @@ html[data-theme='light'] .guide-role-note h3 {
   margin-top: 0.45rem;
   padding: 0.4rem 0.55rem;
   border-radius: var(--radius-sm);
-  border-left: 3px solid var(--text-faint);
+  border-inline-start: 3px solid var(--text-faint);
   background: var(--glass-sunken);
   font-size: 0.76rem;
   line-height: 1.45;
@@ -3500,13 +3500,13 @@ html[data-theme='light'] .guide-role-note h3 {
 }
 
 .cover-none {
-  border-left-color: var(--good);
+  border-inline-start-color: var(--good);
 }
 .cover-watch {
-  border-left-color: var(--warn);
+  border-inline-start-color: var(--warn);
 }
 .cover-high {
-  border-left-color: var(--error);
+  border-inline-start-color: var(--error);
   background: color-mix(in oklab, var(--error) 12%, transparent);
 }
 
@@ -3550,7 +3550,7 @@ html[data-theme='light'] .guide-role-note h3 {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  text-align: left;
+  text-align: start;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -3583,7 +3583,7 @@ html[data-theme='light'] .guide-role-note h3 {
 .tw-shift {
   display: block;
   width: 100%;
-  text-align: left;
+  text-align: start;
   cursor: grab;
   font: inherit;
   font-size: 0.74rem;
@@ -3637,7 +3637,7 @@ html[data-theme='light'] .guide-role-note h3 {
   display: inline-block;
   width: 5px;
   height: 5px;
-  margin-left: 0.35rem;
+  margin-inline-start: 0.35rem;
   border-radius: 50%;
   background: var(--warn);
   vertical-align: middle;
@@ -3676,20 +3676,20 @@ html[data-theme='light'] .guide-role-note h3 {
   font-size: 0.8rem;
   padding: 0.34rem 0.5rem;
   border-radius: var(--radius-sm);
-  border-left: 3px solid var(--hairline);
+  border-inline-start: 3px solid var(--hairline);
   background: var(--glass-sunken);
   animation: rise-in 320ms var(--ease) both;
   animation-delay: calc(var(--i, 0) * 24ms);
 }
 
 .history-schedule {
-  border-left-color: var(--k-cyan);
+  border-inline-start-color: var(--k-cyan);
 }
 .history-timecard {
-  border-left-color: var(--k-magenta);
+  border-inline-start-color: var(--k-magenta);
 }
 .history-approval {
-  border-left-color: var(--good);
+  border-inline-start-color: var(--good);
 }
 
 .history-when {
@@ -3761,16 +3761,16 @@ html[data-theme='light'] .guide-role-note h3 {
 }
 
 .history-shift-rule {
-  border-left-color: var(--k-cyan);
+  border-inline-start-color: var(--k-cyan);
 }
 .history-forecast-settings {
-  border-left-color: var(--warn);
+  border-inline-start-color: var(--warn);
 }
 .history-payroll-run {
-  border-left-color: var(--k-magenta);
+  border-inline-start-color: var(--k-magenta);
 }
 .history-schedule-publish {
-  border-left-color: var(--good);
+  border-inline-start-color: var(--good);
 }
 
 .tw-breach {
@@ -3951,8 +3951,8 @@ html[data-theme='light'] .guide-role-note h3 {
      centred by a translate on larger screens, which has to go with the
      centring or the panel sits half off the left edge. */
   .guide-prompt {
-    left: 0.6rem;
-    right: 0.6rem;
+    inset-inline-start: 0.6rem;
+    inset-inline-end: 0.6rem;
     bottom: 0.6rem;
     max-width: none;
     flex-wrap: wrap;
@@ -4034,7 +4034,7 @@ html[data-theme='light'] .guide-role-note h3 {
 .skip-link {
   position: fixed;
   top: 0.5rem;
-  left: 0.5rem;
+  inset-inline-start: 0.5rem;
   z-index: 100;
   transform: translateY(calc(-100% - 1rem));
   padding: 0.55rem 0.9rem;
@@ -4194,7 +4194,7 @@ main:focus {
   position: absolute;
   z-index: 0;
   top: 3px;
-  left: 0;
+  inset-inline-start: 0;
   bottom: 3px;
   border-radius: 999px;
   background: linear-gradient(120deg, var(--k-indigo-bright), var(--k-indigo));
@@ -4205,7 +4205,7 @@ main:focus {
 }
 
 .segmented-badge {
-  margin-left: 0.35rem;
+  margin-inline-start: 0.35rem;
   font-size: 0.68rem;
   opacity: 0.75;
 }
@@ -4399,7 +4399,7 @@ tbody tr > td:first-child::before,
 tbody tr > th:first-child::before {
   content: '';
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   top: 12%;
   bottom: 12%;
   width: 2px;
@@ -4740,7 +4740,7 @@ main {
 
 .problem-list {
   margin: 0 0 1rem;
-  padding-left: 1.1rem;
+  padding-inline-start: 1.1rem;
   color: var(--bad);
   font-size: var(--step--1);
 }
@@ -4792,3 +4792,142 @@ main {
    suddenly look like body copy with an underline. */
 a.who { text-decoration: none; color: inherit; display: block; }
 a.who:hover .who-name { color: var(--accent); }
+
+/* ------------------------------------------------------------- direction */
+
+/*
+ * Almost all of the layout flips on its own: the stylesheet uses logical
+ * properties throughout, so `padding-inline-start` follows the text direction
+ * and nothing here has to restate it. What is left is the handful of things
+ * CSS cannot express logically, plus the things that should deliberately NOT
+ * flip.
+ */
+
+/* Transforms are physical by definition — there is no `translate-inline`. The
+   guide drawer is pinned to the inline end, which in Arabic is the left edge,
+   so it has to arrive from the left rather than the right. */
+[dir='rtl'] .guide {
+  animation-name: slide-in-rtl;
+}
+
+@keyframes slide-in-rtl {
+  from {
+    transform: translateX(-100%);
+    opacity: 0.4;
+  }
+}
+
+/* The sweep across a primary button reads better travelling the same way as
+   the text it crosses. */
+[dir='rtl'] .btn-primary::after {
+  transform: translateX(120%);
+}
+[dir='rtl'] .btn-primary:hover:not(:disabled)::after {
+  transform: translateX(-120%);
+}
+
+/*
+ * Deliberately kept left-to-right in Arabic.
+ *
+ * A time axis is a number line, and number lines run left to right in Arabic
+ * typography exactly as they do in English — Arabic reverses words, not
+ * arithmetic. Mirroring the coverage chart would put 09:00 on the right and
+ * 17:00 on the left, which is not how anybody reads a shift, and it would
+ * silently reverse every trend line's slope: a rising queue would appear to
+ * fall. The same applies to the day columns of the week grid and to a clock
+ * time, which is written 09:30 in both languages.
+ */
+[dir='rtl'] .chart,
+[dir='rtl'] .chart svg,
+[dir='rtl'] .teamweek-grid,
+[dir='rtl'] .coverage,
+[dir='rtl'] .tabular,
+[dir='rtl'] .stamp,
+[dir='rtl'] time,
+[dir='rtl'] .issued-password {
+  direction: ltr;
+}
+
+/* Those blocks are LTR islands, so their own text needs re-anchoring or it
+   drifts to the wrong edge of its cell. */
+[dir='rtl'] .tabular,
+[dir='rtl'] .stamp {
+  text-align: end;
+}
+
+/* The language control sits with the other identity-level controls. */
+.locale-switch {
+  display: inline-flex;
+  gap: 0.1rem;
+  padding: 0.16rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--glass-sunken);
+}
+.locale-switch button {
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.locale-switch button[aria-pressed='true'] {
+  background: var(--k-indigo);
+  color: #fff;
+}
+.locale-switch button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The language switch on the sign-in screen, where somebody who cannot read
+   the interface has to be able to change it before they are inside. */
+.login-locale {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.9rem;
+}
+
+/*
+ * Mixed-direction text.
+ *
+ * An English sentence sitting inside an Arabic page gets its trailing full
+ * stop reordered to the front — ".Your shift window opens at 22:45" — because
+ * the paragraph direction is right-to-left and the period is neutral, so the
+ * bidi algorithm attaches it to the paragraph rather than to the sentence.
+ * It is not a translation gap; it happens to any English string on an Arabic
+ * screen, including every notification body and clock message the server
+ * sends, which are English regardless of the interface language.
+ *
+ * `unicode-bidi: plaintext` makes each of these take its direction from its
+ * own first strong character, so an English sentence lays out as English and
+ * an Arabic one as Arabic, inside the same right-to-left page. Applied only to
+ * elements that carry sentences — the surrounding layout keeps the page
+ * direction.
+ */
+[dir='rtl'] p,
+[dir='rtl'] li,
+[dir='rtl'] td,
+[dir='rtl'] th,
+[dir='rtl'] .muted,
+[dir='rtl'] .note-body,
+[dir='rtl'] .note-title,
+[dir='rtl'] .banner,
+[dir='rtl'] .clock-state,
+[dir='rtl'] .card > h3,
+[dir='rtl'] .card-subtitle,
+[dir='rtl'] .empty,
+/* `unicode-bidi` is not inherited, so each nested block that holds a sentence
+   needs it in its own right — setting it on the banner alone leaves the body
+   div inside it resolving against the page again. */
+[dir='rtl'] .banner div,
+[dir='rtl'] .banner strong,
+[dir='rtl'] .guide-prompt div,
+[dir='rtl'] .guide-prompt strong,
+[dir='rtl'] .toast div,
+[dir='rtl'] .toast strong {
+  unicode-bidi: plaintext;
+}

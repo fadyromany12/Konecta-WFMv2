@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './state';
+import { useT } from './i18n';
+import { LocaleSwitch } from './components/LocaleSwitch';
 import { GuideDrawer } from './components/Guide';
 import { Tour, TourPrompt } from './components/Tour';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -33,6 +35,7 @@ const TABS = [
 
 export function App() {
   const { user, catalog, loading, signOut } = useSession();
+  const t = useT();
   const location = useLocation();
   const [guideOpen, setGuideOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -66,7 +69,7 @@ export function App() {
   // that all fail is worse than no chrome at all.
   if (user.mustChangePassword) return <ChangePassword forced />;
 
-  const tabs = TABS.filter((t) => !t.supervisorOnly || user.isSupervisor);
+  const tabs = TABS.filter((tab) => !tab.supervisorOnly || user.isSupervisor);
 
   return (
     <div className="app">
@@ -75,7 +78,7 @@ export function App() {
           identity and every navigation tab before reaching the screen they
           asked for — on every single page load. */}
       <a className="skip-link" href="#main">
-        Skip to content
+        {t('Skip to content')}
       </a>
 
       <header className="topbar">
@@ -91,22 +94,23 @@ export function App() {
           className="cmdk"
           onClick={() => setPaletteOpen(true)}
           title="Search and jump anywhere"
-          aria-label="Open the command palette"
+          aria-label={t('Open the command palette')}
         >
-          <span className="cmdk-label">Search</span>
+          <span className="cmdk-label">{t('Search')}</span>
           <kbd>{isMac() ? '⌘' : 'Ctrl'}K</kbd>
         </button>
         <NotificationBell />
+        <LocaleSwitch />
         <ThemeToggle />
         <button
           className="help-btn"
           onClick={openGuide}
           title="Guide for this screen (?)"
-          aria-label="Open the guide"
+          aria-label={t('Open the guide')}
         >
           ?
         </button>
-        <NavLink className="who" to="/account/password" title="Change your password">
+        <NavLink className="who" to="/account/password" title={t('Change your password')}>
           <div className="who-name">{user.name}</div>
           <div className="who-role">
             {user.roleLabel} · {user.employeeId}
@@ -114,11 +118,11 @@ export function App() {
           </div>
         </NavLink>
         <button className="btn btn-ghost" onClick={signOut}>
-          Sign out
+          {t('Sign out')}
         </button>
       </header>
 
-      <TravellingNav className="tabs" indicatorClassName="tabs-underline" ariaLabel="Sections">
+      <TravellingNav className="tabs" indicatorClassName="tabs-underline" ariaLabel={t('Sections')}>
         {tabs.map((tab, i) => (
           <NavLink
             key={tab.to}
@@ -127,9 +131,9 @@ export function App() {
             className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}
             // Read by CSS to reserve the *bold* width up front. See the note
             // on `.tab::before`.
-            data-label={tab.label}
+            data-label={t(tab.label)}
           >
-            {tab.label}
+            {t(tab.label)}
           </NavLink>
         ))}
       </TravellingNav>
@@ -142,7 +146,9 @@ export function App() {
       <main id="main" tabIndex={-1} key={location.pathname.split('/')[1]}>
         {/* Every page had no h1 at all, so a screen reader's heading outline
             started at the first card and never said which screen this was. */}
-        <h1 className="sr-only">{tabs.find((t) => location.pathname.startsWith(t.to))?.label ?? 'Konecta Pulse'}</h1>
+        <h1 className="sr-only">
+          {t(tabs.find((tab) => location.pathname.startsWith(tab.to))?.label ?? 'Konecta Pulse')}
+        </h1>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />

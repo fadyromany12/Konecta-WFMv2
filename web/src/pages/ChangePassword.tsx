@@ -15,11 +15,13 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useSession } from '../state';
+import { useT } from '../i18n';
 import { useToast } from '../components/Toast';
 import { Banner, Button, Card, Toolbar } from '../components/ui';
 
 export function ChangePassword({ forced = false, onDone }: { forced?: boolean; onDone?: () => void }) {
   const { user, refreshUser } = useSession();
+  const t = useT();
   const toast = useToast();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -39,7 +41,7 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
     setProblems([]);
     try {
       await api.post('/auth/password', { currentPassword: current, newPassword: next });
-      toast.success('Password changed.', 'It takes effect now, everywhere you sign in.');
+      toast.success(t('Password changed.'), t('It takes effect now, everywhere you sign in.'));
       await refreshUser();
       onDone?.();
     } catch (err) {
@@ -59,20 +61,17 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
     <>
       {forced && (
           <Banner tone="warn">
-            You signed in with a password somebody issued to you. Choose one of your own before
-            going any further — nothing else will work until you do.
+            {t('You signed in with a password somebody issued to you. Choose one of your own before going any further — nothing else will work until you do.')}
           </Banner>
         )}
 
         <p className="muted">
-          At least 10 characters. A short phrase of a few words is stronger than a short word with
-          symbols in it, and much easier to type on a shift. It must not contain your own name,
-          email address or employee ID.
+          {t('At least 10 characters. A short phrase of a few words is stronger than a short word with symbols in it, and much easier to type on a shift. It must not contain your own name, email address or employee ID.')}
         </p>
 
         <form onSubmit={submit} className="stack">
           <label>
-            <span>{forced ? 'The password you were given' : 'Current password'}</span>
+            <span>{forced ? t('The password you were given') : t('Current password')}</span>
             <input
               type="password"
               autoComplete="current-password"
@@ -83,7 +82,7 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
             />
           </label>
           <label>
-            <span>New password</span>
+            <span>{t('New password')}</span>
             <input
               type="password"
               autoComplete="new-password"
@@ -93,7 +92,7 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
             />
           </label>
           <label>
-            <span>New password again</span>
+            <span>{t('New password again')}</span>
             <input
               type="password"
               autoComplete="new-password"
@@ -104,7 +103,7 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
             />
           </label>
 
-          {mismatch && <p className="field-error">Those two do not match.</p>}
+          {mismatch && <p className="field-error">{t('Those two do not match.')}</p>}
 
           {problems.length > 0 && (
             <ul className="problem-list">
@@ -116,11 +115,11 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
 
           <Toolbar>
             <Button type="submit" variant="primary" disabled={saving || mismatch || !next}>
-              {saving ? 'Saving…' : 'Set my password'}
+              {saving ? t('Saving…') : t('Set my password')}
             </Button>
             {!forced && onDone && (
               <Button type="button" onClick={onDone}>
-                Cancel
+                {t('Cancel')}
               </Button>
             )}
           </Toolbar>
@@ -128,13 +127,13 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
 
       {forced && (
         <p className="muted small">
-          Signed in as {user?.email}. If that is not you, sign out and start again.
+          {t('Signed in as {email}. If that is not you, sign out and start again.', { email: user?.email ?? '' })}
         </p>
       )}
     </>
   );
 
-  if (!forced) return <Card title="Change your password">{body}</Card>;
+  if (!forced) return <Card title={t('Change your password')}>{body}</Card>;
 
   return (
     <div className="login-wrap">
@@ -144,7 +143,7 @@ export function ChangePassword({ forced = false, onDone }: { forced?: boolean; o
             Konecta <span>Pulse</span>
           </span>
         </div>
-        <h2 className="gate-title">Choose your own password</h2>
+        <h2 className="gate-title">{t('Choose your own password')}</h2>
         {body}
       </div>
     </div>
