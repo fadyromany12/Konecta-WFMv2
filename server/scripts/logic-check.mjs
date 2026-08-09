@@ -732,6 +732,54 @@ const ramHolidays = (await call('GET',`/pay/holidays?start=${YEAR}-01-01&end=${Y
 check('no Ramadan date is also a public holiday',
   ram.dates.every((d) => !ramHolidays.some((h) => h.date === d)));
 
+console.log('=== ABSENCE PATTERNS ===');
+const pat = (await call('GET','/absence/patterns',TL)).body;
+check('absence patterns load for a team', Array.isArray(pat?.profiles), JSON.stringify(pat)?.slice(0,120));
+check('the window defaults to 52 weeks', pat.start < day(-350) && pat.start > day(-370), `${pat?.start}`);
+check('trigger bands are published with the numbers', Array.isArray(pat.triggers) && pat.triggers.length === 4);
+check('worst first, so the screen leads with who needs a conversation',
+  pat.profiles.every((p, i) => i === 0 || pat.profiles[i-1].score >= p.score));
+check('every profile carries the arithmetic', pat.profiles.every((p) =>
+  typeof p.spells === 'number' && typeof p.days === 'number' && typeof p.score === 'number'));
+check('the score really is spells squared times days',
+  pat.profiles.every((p) => p.score === p.spells * p.spells * p.days));
+check('every profile is put in a band', pat.profiles.every((p) =>
+  ['NONE','REVIEW','CONCERN','FORMAL'].includes(p.band)));
+check('and given a reading in words', pat.profiles.every((p) => typeof p.summary === 'string' && p.summary.length > 0));
+check('somebody with no absence says so plainly',
+  pat.profiles.filter((p)=>p.spells===0).every((p)=>/No unplanned absence/.test(p.summary)));
+check('a clean record scores zero and triggers nothing',
+  pat.profiles.filter((p)=>p.spells===0).every((p)=>p.score===0 && p.band==='NONE'));
+// Booked leave is not disruption. If it counted, the seeded advisors with PTO
+// would show spells they never had.
+const withPto = (await call('GET','/absence/patterns',TL)).body.profiles;
+check('booked leave never reaches the score', withPto.every((p)=>p.days >= 0 && p.score === p.spells*p.spells*p.days));
+check('a supervisor sees only their own people',
+  pat.profiles.length > 0 && pat.profiles.length <= (await call('GET','/people',TL)).body.people.length);
+check('an advisor cannot read absence patterns', (await call('GET','/absence/patterns',ADV)).status === 403);
+check('a backwards range is refused',
+  (await call('GET',`/absence/patterns?start=${day(0)}&end=${day(-5)}`,TL)).status === 400);
+// A window with nothing in it is empty, not an error.
+const emptyWindow = (await call('GET',`/absence/patterns?start=${day(-2)}&end=${day(-2)}`,TL)).body;
+check('a one-day window still answers', Array.isArray(emptyWindow?.profiles));
+check('and scores everybody in it', emptyWindow.profiles.every((p)=>typeof p.score === 'number'));
+
+// The distinction the whole feature exists to draw: fewer days absent, far
+// higher score, because the days were scattered rather than consecutive.
+const scattered = pat.profiles.find((p) => p.name === 'Karim Fouad');
+const illness = pat.profiles.find((p) => p.name === 'Sara Nabil');
+if (scattered && illness) {
+  check('scattered single days score far above a longer single illness',
+    scattered.score > illness.score * 10, `${scattered.score} vs ${illness.score}`);
+  check('even though the illness was more days absent',
+    illness.days > scattered.days, `${illness.days} vs ${scattered.days}`);
+  check('and only the scattered pattern trips a trigger',
+    scattered.band !== 'NONE' && illness.band === 'NONE', `${scattered.band} / ${illness.band}`);
+  check('the scattered record is named as such in words',
+    /single day/.test(scattered.summary), scattered.summary);
+  check('consecutive absent days stay one occasion', illness.spells === 1, `${illness.spells} spells`);
+} else check('the seeded absence patterns are present', false, 'Karim Fouad / Sara Nabil not found');
+
 console.log('=== FORECAST ACCURACY ===');
 const acc = (await call('GET',`/accuracy?start=${day(-14)}&end=${day(-1)}`,OM)).body;
 check('accuracy reports over a period', typeof acc?.measured === 'number', JSON.stringify(acc)?.slice(0,120));

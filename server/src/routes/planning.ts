@@ -20,6 +20,8 @@ import {
 } from '../services/planning.js';
 import { intradaySnapshot } from '../services/intraday.js';
 import { accuracyFor, getActuals, saveActuals } from '../services/accuracy.js';
+import { absenceProfiles } from '../services/absencePatterns.js';
+import { TRIGGERS } from '../domain/bradford.js';
 import {
   autoSchedule,
   coverageFor,
@@ -124,6 +126,28 @@ planning.get(
       getForecast(projectId, date),
     ]);
     res.json({ ...result, projectId, forecast });
+  }),
+);
+
+// ------------------------------------------------------ absence patterns
+//
+// Bradford weights frequency over duration, so this answers a question a daily
+// absence list cannot: who is absent *often*, as distinct from who has been
+// absent a lot of days.
+
+planning.get(
+  '/absence/patterns',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const end = dateSchema.parse(req.query.end ?? todayStr());
+    const start = req.query.start ? dateSchema.parse(req.query.start) : undefined;
+    if (start && start > end) throw new HttpError(400, 'The start date is after the end date.');
+    const userIds = await groupOf(req);
+    res.json({
+      ...(await absenceProfiles({ userIds, start, end })),
+      triggers: TRIGGERS,
+    });
   }),
 );
 

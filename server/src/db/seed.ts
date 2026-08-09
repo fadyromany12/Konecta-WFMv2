@@ -827,6 +827,84 @@ async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Prom
     );
   });
 
+  // ------------------------------------------------------- absence patterns
+  //
+  // A scattered attendance record for one advisor, spread across the rolling
+  // 52 week window rather than the three weeks of full history.
+  //
+  // Without it the Bradford screen is correct and says nothing: three weeks of
+  // data cannot contain a pattern, so every advisor scores under the first
+  // trigger and the bands are decoration. Six single days at roughly monthly
+  // intervals is what a genuinely disruptive record looks like — 6² × 6 = 216,
+  // which lands in CONCERN — and it is precisely the shape that a daily
+  // absence list makes invisible.
+  //
+  // Deliberately paired with a longer illness on somebody else, so the screen
+  // demonstrates the distinction it exists to draw: more days absent, far
+  // lower score.
+  await transact(async () => {
+    const scattered = nightAdvisors[1]; // Karim Fouad
+    const days = [-31, -66, -101, -140, -178, -215].map((offset) => addDays(today, offset));
+    for (const date of days) {
+      const cardId = await db.insert(
+        `INSERT INTO timecards (user_id, payroll_date, shift_no, approved, edited, updated_at)
+         VALUES (?, ?, 1, 1, 1, ?)`,
+        [scattered, date, nowStamp()],
+      );
+      await db.run(
+        `INSERT INTO timecard_rows (timecard_id, code, project, activity, start_at, end_at, sort_order)
+         VALUES (?, 'ABS', 'A123', '99-003', ?, ?, 0)`,
+        [cardId, stamp(date, '09:00'), stamp(date, '17:30')],
+      );
+      // A rostered day underneath each one, *and the days either side*.
+      //
+      // The day either side is not decoration. Spells are joined when the
+      // rostered day immediately before an absence was also an absence, and
+      // with only the absent days on the roster each one's predecessor is the
+      // previous absence — so six separate occasions three months apart
+      // chained into a single spell and scored 6 instead of 216. Rostering the
+      // surrounding days is what a real roster looks like, and it is what
+      // makes these read as six distinct occasions.
+      for (const around of [addDays(date, -1), date, addDays(date, 1)]) {
+        await db.run(
+          `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, status, updated_at)
+           VALUES (?, ?, 1, ?, 'PUBLISHED', ?)`,
+          [scattered, around, stamp(around, '17:30'), nowStamp()],
+        );
+      }
+    }
+
+    const ill = nightAdvisors[2]; // Sara Nabil
+    for (let i = 0; i < 9; i++) {
+      const date = addDays(today, -120 + i);
+      const cardId = await db.insert(
+        `INSERT INTO timecards (user_id, payroll_date, shift_no, approved, edited, updated_at)
+         VALUES (?, ?, 1, 1, 1, ?)`,
+        [ill, date, nowStamp()],
+      );
+      await db.run(
+        `INSERT INTO timecard_rows (timecard_id, code, project, activity, start_at, end_at, sort_order)
+         VALUES (?, 'SCK', 'A123', '99-003', ?, ?, 0)`,
+        [cardId, stamp(date, '09:00'), stamp(date, '17:30')],
+      );
+      await db.run(
+        `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, status, updated_at)
+         VALUES (?, ?, 1, ?, 'PUBLISHED', ?)`,
+        [ill, date, stamp(date, '17:30'), nowStamp()],
+      );
+    }
+    // Bound the illness with rostered days either side, so it is nine
+    // consecutive absences inside a working stretch rather than nine days
+    // floating with nothing before or after them.
+    for (const around of [addDays(today, -121), addDays(today, -111)]) {
+      await db.run(
+        `INSERT INTO schedules (user_id, payroll_date, shift_no, end_at, status, updated_at)
+         VALUES (?, ?, 1, ?, 'PUBLISHED', ?)`,
+        [ill, around, stamp(around, '17:30'), nowStamp()],
+      );
+    }
+  });
+
   // ------------------------------------------------------------ self service
   const OFFER_SQL = `INSERT INTO extra_hours_offers (project_id, date, start_time, end_time, slots, note, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?)`;
