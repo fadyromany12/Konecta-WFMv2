@@ -19,6 +19,9 @@ import {
 } from '../components/ui';
 import { addDays, durationBetween, rollForward, timeOf, today, withTime } from '../lib/time';
 import { Planning } from './Planning';
+import { ForecastEntry } from './ForecastEntry';
+import { TeamWeek } from './TeamWeek';
+import { MultiSkill } from './MultiSkill';
 
 export function Scheduling() {
   return (
@@ -26,14 +29,20 @@ export function Scheduling() {
       <SubTabs
         items={[
           { to: '/scheduling', label: 'Edit Advisor Schedule' },
+          { to: '/scheduling/week', label: 'Team Week' },
           { to: '/scheduling/group', label: 'Group Schedule Exceptions' },
           { to: '/scheduling/forecast', label: 'Forecast & Coverage' },
+          { to: '/scheduling/volumes', label: 'Enter Forecast' },
+          { to: '/scheduling/skills', label: 'Multi-Skill' },
         ]}
       />
       <Routes>
         <Route index element={<EditSchedule />} />
+        <Route path="week" element={<TeamWeek />} />
         <Route path="group" element={<GroupExceptions />} />
         <Route path="forecast" element={<Planning />} />
+        <Route path="volumes" element={<ForecastEntry />} />
+        <Route path="skills" element={<MultiSkill />} />
       </Routes>
     </>
   );
@@ -54,7 +63,7 @@ function EditSchedule() {
   const [personId, setPersonId] = useState<number | null>(
     params.get('userId') ? Number(params.get('userId')) : null,
   );
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(params.get('date') ?? today());
   const [shifts, setShifts] = useState<ScheduleShift[]>([]);
   const [selected, setSelected] = useState<{ shift: number; row: number } | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -69,6 +78,14 @@ function EditSchedule() {
     const requested = params.get('userId');
     if (requested && Number(requested) !== personId) setPersonId(Number(requested));
   }, [params, personId]);
+
+  // A shift clicked in the team week arrives with a day attached. Keyed on the
+  // parameter rather than on `date`, so picking a different day afterwards is
+  // not immediately snapped back to whatever the URL still says.
+  const dateParam = params.get('date');
+  useEffect(() => {
+    if (dateParam) setDate(dateParam);
+  }, [dateParam]);
 
   const people = useAsync(
     () => (group ? api.get<{ people: Person[] }>(`/people?group=${encodeURIComponent(group)}`) : Promise.resolve({ people: [] })),
@@ -360,6 +377,40 @@ function GroupExceptions() {
     }
   }
 
+  /**
+   * Undo.
+   *
+   * Applying a meeting to twenty people took one click and removing it took
+   * twenty edits — which meant in practice it never got removed, and a meeting
+   * that moved stayed on the schedule counting against everybody's adherence
+   * for the rest of the week.
+   */
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.post<{ removed: number[]; skipped: { userId: number; reason: string }[] }>(
+        '/schedules/group-exception/remove',
+        { group, date, activityKey, startTime, endTime },
+      );
+      setResult({ applied: res.removed, skipped: res.skipped });
+      if (res.removed.length > 0) {
+        toast.success(
+          `Removed from ${res.removed.length} schedule${res.removed.length === 1 ? '' : 's'}.`,
+          'The timecards have been re-derived without it.',
+        );
+      } else {
+        toast.warn('Nothing matched.', 'Check the activity and start time are exactly as they were applied.');
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Card
       title="Group Schedule Exceptions"
@@ -390,6 +441,9 @@ function GroupExceptions() {
         </label>
         <Button variant="primary" onClick={apply} disabled={busy}>
           Apply to group
+        </Button>
+        <Button onClick={remove} disabled={busy} title="Take this exception back off everyone's schedule">
+          Remove from group
         </Button>
       </Toolbar>
 

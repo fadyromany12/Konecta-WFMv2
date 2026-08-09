@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './state';
-import { GuideDrawer, GuidePrompt } from './components/Guide';
+import { GuideDrawer } from './components/Guide';
+import { Tour, TourPrompt } from './components/Tour';
 import { ThemeToggle } from './components/ThemeToggle';
 import { NotificationBell } from './components/Notifications';
+import { PulseLine } from './components/PulseLine';
 import { CommandPalette } from './components/CommandPalette';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
@@ -31,6 +33,8 @@ export function App() {
   const location = useLocation();
   const [guideOpen, setGuideOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [tour, setTour] = useState<{ open: boolean; at: number }>({ open: false, at: 0 });
+  const startTour = useCallback((at = 0) => setTour({ open: true, at }), []);
 
   const toggleGuide = useCallback(() => setGuideOpen((v) => !v), []);
   const togglePalette = useCallback(() => setPaletteOpen((v) => !v), []);
@@ -55,11 +59,20 @@ export function App() {
 
   return (
     <div className="app">
+      {/* First in the tab order, invisible until focused. Without it a
+          keyboard user tabs through the brand, search, bell, theme, guide,
+          identity and every navigation tab before reaching the screen they
+          asked for — on every single page load. */}
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">
             Konecta <span>Pulse</span>
           </span>
+          <PulseLine />
           <span className="brand-sub">{catalog?.product.acronym}</span>
         </div>
         <div className="topbar-spacer" />
@@ -95,8 +108,13 @@ export function App() {
       </header>
 
       <nav className="tabs">
-        {tabs.map((tab) => (
-          <NavLink key={tab.to} to={tab.to} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
+        {tabs.map((tab, i) => (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            style={{ '--i': i } as React.CSSProperties}
+            className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}
+          >
             {tab.label}
           </NavLink>
         ))}
@@ -104,7 +122,13 @@ export function App() {
 
       {/* Keying on the tab restarts the entrance animation on navigation, so a
           new screen arrives rather than swapping in place. */}
-      <main key={location.pathname.split('/')[1]}>
+      {/* `tabIndex={-1}` is what makes the skip link actually work. Without it
+          the hash changes, the page scrolls, and focus stays on the body — so
+          the next Tab goes back to the header the link just skipped. */}
+      <main id="main" tabIndex={-1} key={location.pathname.split('/')[1]}>
+        {/* Every page had no h1 at all, so a screen reader's heading outline
+            started at the first card and never said which screen this was. */}
+        <h1 className="sr-only">{tabs.find((t) => location.pathname.startsWith(t.to))?.label ?? 'Konecta Pulse'}</h1>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
@@ -119,9 +143,15 @@ export function App() {
         </Routes>
       </main>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenGuide={openGuide} />
-      <GuideDrawer open={guideOpen} onClose={() => setGuideOpen(false)} />
-      <GuidePrompt onOpen={openGuide} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onOpenGuide={openGuide}
+        onStartTour={() => startTour(0)}
+      />
+      <GuideDrawer open={guideOpen} onClose={() => setGuideOpen(false)} onStartTour={() => startTour(0)} />
+      <Tour open={tour.open} startAt={tour.at} onClose={() => setTour({ open: false, at: 0 })} />
+      {!tour.open && !guideOpen && <TourPrompt onStart={startTour} />}
     </div>
   );
 }

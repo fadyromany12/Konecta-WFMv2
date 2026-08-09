@@ -39,6 +39,12 @@ export interface ScheduleShift {
   rows: ScheduleRow[];
   /** End-of-shift marker: the end of the final row. */
   endAt: Stamp;
+  /**
+   * Whether the advisor has been told about this yet. Absent on shifts built
+   * in memory — validation and the rules below do not care, because a draft
+   * has to be a legal schedule before it can be published.
+   */
+  status?: 'DRAFT' | 'PUBLISHED';
 }
 
 export interface ScheduleSegment {
@@ -88,6 +94,24 @@ export function shiftSpan(shift: ScheduleShift): { startAt: Stamp; endAt: Stamp;
   const resolved = resolveRowDates(shift);
   const startAt = resolved.rows[0]?.startAt ?? resolved.endAt;
   return { startAt, endAt: resolved.endAt, minutes: diffMinutes(startAt, resolved.endAt) };
+}
+
+/**
+ * The same shift, `days` later — what dragging it across the week means.
+ *
+ * Every stamp moves by the same whole number of days, which is the only way an
+ * overnight shift survives the move: shifting the start alone would collapse a
+ * 22:00–06:00 onto a single date, and re-deriving the dates from the times
+ * would be right for a day shift and wrong for that one. Clock times are never
+ * touched, so the advisor works the hours they were told they would.
+ */
+export function shiftByDays(shift: ScheduleShift, days: number): ScheduleShift {
+  const move = (s: Stamp): Stamp => `${addDays(dateOf(s), days)} ${timeOf(s)}` as Stamp;
+  return {
+    ...shift,
+    endAt: move(shift.endAt),
+    rows: shift.rows.map((row) => ({ ...row, startAt: move(row.startAt) })),
+  };
 }
 
 export function validateSchedule(shifts: ScheduleShift[], payrollDate: DateStr): Issue[] {
@@ -224,4 +248,35 @@ function minutesToStamp(mins: number): Stamp {
   const hh = String(Math.floor(rem / 60)).padStart(2, '0');
   const mm = String(rem % 60).padStart(2, '0');
   return `${date} ${hh}:${mm}`;
+}
+
+/**
+ * Which shift a given moment belongs to.
+ *
+ * The live board looks at two days at once, because a shift that began
+ * yesterday evening is still today's business at 02:00. That makes "when was
+ * this person due to start?" ambiguous, and getting it wrong is not subtle: the
+ * first version took the earliest segment across the whole window, so an
+ * advisor who worked yesterday and is due on again today was reported as 1833
+ * minutes late — measured against a shift that had finished thirty hours
+ * earlier.
+ *
+ * The moment belongs to the shift that contains it. Failing that, to the next
+ * shift due to start on `today`, so a screen can still say when someone is
+ * expected. Never to a shift that has already ended.
+ */
+export function activeShift(
+  shifts: ScheduleShift[],
+  now: Stamp,
+  today: DateStr,
+): ScheduleShift | null {
+  const spans = shifts
+    .map((shift) => ({ shift, span: shiftSpan(shift) }))
+    .sort((a, b) => a.span.startAt.localeCompare(b.span.startAt));
+
+  const containing = spans.find((s) => s.span.startAt <= now && s.span.endAt > now);
+  if (containing) return containing.shift;
+
+  const upcoming = spans.find((s) => s.span.startAt > now && s.span.startAt.slice(0, 10) === today);
+  return upcoming?.shift ?? null;
 }

@@ -28,6 +28,25 @@ export interface TabGuide {
   watchFor: string[];
 }
 
+/**
+ * What one role is doing on one screen.
+ *
+ * The tab guidance answers "what is this screen for"; this answers "what is it
+ * for *me*". They are genuinely different questions — a Team Leader opens Time
+ * & Attendance to clear yesterday inside a three day window, an Operations
+ * Manager opens the same screen to make a post-payroll correction six weeks
+ * back, and an Advisor opens it to check they were paid. Telling all three the
+ * same thing is how a guide gets ignored.
+ */
+export interface RoleTabNote {
+  /** One sentence: why this role is on this screen. */
+  focus: string;
+  /** Moves specific to this role, where they differ from the general steps. */
+  steps?: GuideStep[];
+  /** Mistakes this role in particular makes here. */
+  watchFor?: string[];
+}
+
 export interface RoleGuide {
   role: Role;
   label: string;
@@ -356,4 +375,274 @@ export function guideForPath(pathname: string): TabGuide | undefined {
 
 export function roleGuide(role: string): RoleGuide | undefined {
   return ROLE_GUIDES.find((g) => g.role === role);
+}
+
+
+/**
+ * Per-role notes, keyed by the tab's route.
+ *
+ * Kept beside the tab guidance rather than inside it so that adding a role's
+ * note is a small, local edit — the whole point being that this is expected to
+ * be revised as people use the tool and tell you what they actually got stuck
+ * on.
+ */
+export const ROLE_TAB_NOTES: Record<string, Partial<Record<Role, RoleTabNote>>> = {
+  '/dashboard': {
+    ADVISOR: {
+      focus: 'Clock on, change activity, clock off. This screen is your timesheet as it happens.',
+      steps: [
+        {
+          title: 'Clock on when your shift starts',
+          body: 'The button only opens inside your scheduled window. If it is greyed out you are either early, or you have no shift — and no shift is a scheduling problem, not a clock problem.',
+        },
+        {
+          title: 'Change activity rather than clocking off',
+          body: 'Break, lunch, training, meeting — change to it. Clocking off ends your shift, and a shift ended by mistake becomes a correction somebody else has to make.',
+        },
+      ],
+      watchFor: [
+        'Once you go on an unpaid meal you cannot return to a paid activity until the full meal duration has passed. That is the rule, not a bug.',
+      ],
+    },
+    TEAM_LEADER: {
+      focus: 'Know where your team is right now, and clear the things that are still fixable today.',
+      steps: [
+        {
+          title: 'Work the alert list first',
+          body: 'Late, left early, over their break. Every one of these is recoverable while the shift is running and becomes an exception on a timecard once it is not.',
+        },
+        {
+          title: 'A no-show is not a late',
+          body: 'Somebody who never clocked on is a cover problem, not a chase. The board separates the two so you spend your morning on the right one.',
+        },
+      ],
+      watchFor: [
+        'Live adherence counts only people on shift right now. It is not the daily figure in Reports and the two will not match.',
+      ],
+    },
+    TRAINER: {
+      focus: 'Your class, and whether they are clocking on correctly while they learn to.',
+      watchFor: [
+        'New hires get the clocking wrong far more than they get the work wrong. A cluster of Late on your board is usually a training gap, not an attendance problem.',
+      ],
+    },
+    OPS_MANAGER: {
+      focus: 'Cover against forecast across every team, and whether today is going to hold.',
+      steps: [
+        {
+          title: 'Read the coverage chart before the board',
+          body: 'The board tells you who; the chart tells you whether it matters. Short intervals with a real forecast behind them are what you can still act on.',
+        },
+      ],
+    },
+    ADMIN: {
+      focus: 'A whole-estate view. Mostly you are here to confirm the system is reflecting reality.',
+    },
+  },
+
+  '/time': {
+    ADVISOR: {
+      focus: 'Check what you were actually paid for. You can read your cards; you cannot change them.',
+      watchFor: [
+        'If a card is wrong, tell your Team Leader rather than waiting. Their window to fix it without escalation is three days.',
+      ],
+    },
+    TEAM_LEADER: {
+      focus: 'Clear yesterday. Your edit window is three days and it is the shortest of anyone’s.',
+      steps: [
+        {
+          title: 'Sort to what needs reading',
+          body: 'Cards with exceptions are the ones worth opening. Everything else is a checkbox, which is exactly what “Approve N clean” is for.',
+        },
+        {
+          title: 'Approve deliberately',
+          body: 'Approval is what sends the day to payroll. Bulk approval refuses anything carrying an exception precisely so those stay a decision you make.',
+        },
+      ],
+      watchFor: [
+        'Past three days the card is no longer yours. It goes to your Operations Manager, and that is a conversation, not a form.',
+      ],
+    },
+    TRAINER: {
+      focus: 'Your trainees’ cards, with six days to correct them.',
+      watchFor: [
+        'Training time is paid and productive but not phone time. A trainee card that looks like poor adherence is usually a schedule that says phones when the class says otherwise.',
+      ],
+    },
+    OPS_MANAGER: {
+      focus: 'Everything the Team Leaders could not reach, and any correction after payroll has run.',
+      steps: [
+        {
+          title: 'Post-payroll corrections',
+          body: 'Editing a card past its protect date does not change the run that already happened. It transfers on the next one, and the card says so.',
+        },
+      ],
+      watchFor: [
+        'Forty-four days is a long window. The fact that you *can* edit a card from six weeks ago is not a reason to; ask why it was missed.',
+      ],
+    },
+    ADMIN: {
+      focus: 'A year of edit window, which exists for data repair rather than day-to-day correction.',
+      watchFor: ['Every edit is attributable in the audit trail. Yours especially.'],
+    },
+  },
+
+  '/scheduling': {
+    TEAM_LEADER: {
+      focus: 'Day-to-day changes to your own team’s shifts, and dropping one exception across the group at once.',
+      steps: [
+        {
+          title: 'Times are authoritative, dates follow',
+          body: 'Type the time; the tool works out which day it lands on. That is what keeps an overnight shift on one payroll date.',
+        },
+        {
+          title: 'Team Week answers “who is off on Thursday”',
+          body: 'The day editor is for one person on one day. Team Week is the whole group across seven days, with a headcount under each date — open it before you approve anything that removes a body.',
+        },
+        {
+          title: 'Drag a shift to move the day',
+          body: 'Dragging moves the whole shift and keeps its shape, so an overnight stays overnight. Click it instead to open that day in the editor and change what is inside it.',
+        },
+      ],
+      watchFor: [
+        'A group exception that falls outside somebody’s shift is skipped and reported. It never silently moves their shift — read the skipped list.',
+        'Days that have already happened cannot be dragged. Their timecards are derived against the plan that was in force, and moving it afterwards would change what somebody was measured against.',
+      ],
+    },
+    TRAINER: {
+      focus: 'Putting class time on the schedule so trainee adherence is measured against the right plan.',
+    },
+    OPS_MANAGER: {
+      focus: 'Forecast and coverage. This is where the roster gets decided rather than repaired.',
+      steps: [
+        {
+          title: 'Cover the gap, then check the cost',
+          body: 'Auto-schedule drafts shifts into the worst-covered intervals. Look at projected service level and occupancy afterwards — occupancy above about 85% is a warning, not an achievement.',
+        },
+      ],
+      watchFor: [
+        'Coverage and the requirement on Forecast & Coverage still assume one queue. Multi-Skill is where that assumption is dropped — if your work is genuinely split by language or skill, size it there and treat the single-queue figure as the floor.',
+        'Multi-Skill simulates rather than solving. It is seeded, so it gives the same answer every time, but it is an estimate and the last percentage point is not meaningful.',
+      ],
+    },
+    ADMIN: { focus: 'You have access; ordinarily this is not your screen.' },
+  },
+
+  '/my': {
+    ADVISOR: {
+      focus: 'Everything you can arrange about your own time without asking anybody in person.',
+      steps: [
+        {
+          title: 'My Week shows what you have been told',
+          body: 'Only published days appear. A week your team leader is still building is not there yet, and you are never expected to work a shift you have not been shown.',
+        },
+        {
+          title: 'What changed is your own record',
+          body: 'Everything done to your schedule and your timecards, with who did it and when. It is the answer to "I think my Thursday moved" — check it before you ask.',
+        },
+        {
+          title: 'Time off is checked as you submit',
+          body: 'You cannot request more than you have accrued. The balance only moves when it is approved, not when you ask.',
+        },
+        {
+          title: 'A swap needs three yeses',
+          body: 'You, your colleague, then a supervisor. Nothing moves on your schedule until the third one.',
+        },
+        {
+          title: 'Extra hours are bid for, not claimed',
+          body: 'Bidding puts your hand up. Winning it puts the block on your schedule, which is what lets you clock on for it at all.',
+        },
+      ],
+    },
+    TEAM_LEADER: {
+      focus: 'The approvals queue: swaps your team agreed between themselves, and extra hours to award.',
+      watchFor: [
+        'Approving a swap exchanges the schedules immediately and re-derives both timecards. Check neither person ends up scheduled twice.',
+        'Your team can see what you did to their record and when, on their own My Week. That is deliberate — it is the same audit trail, turned to face the person it was done to.',
+      ],
+    },
+    OPS_MANAGER: {
+      focus: 'Leave liability and whether extra hours are covering real gaps or just costing money.',
+    },
+  },
+
+  '/admin': {
+    TEAM_LEADER: {
+      focus: 'Custom groups for the people you actually work with, and an alternate for when you are away.',
+      steps: [
+        {
+          title: 'Assign an alternate before you go on leave',
+          body: 'They see your team and your groups for as long as it stands. Without one, your team has nobody inside the three day window.',
+        },
+      ],
+      watchFor: ['You get one alternate at a time. Remove the current one before assigning another.'],
+    },
+    TRAINER: { focus: 'Mostly the roster of who is in your class and what their records say.' },
+    OPS_MANAGER: {
+      focus: 'Shift rules, which decide how lateness and meals are judged for everybody under them.',
+      steps: [
+        {
+          title: 'The Rules Log is what to open after a disputed run',
+          body: 'Shift rules, the staffing model, payroll runs and publications on one timeline. "What was different back then" is the first question asked, and this is the only screen that answers it in one place.',
+        },
+      ],
+      watchFor: [
+        'A rule change can only take effect from a future date. That is deliberate — it stops a change rewriting how time already worked was judged.',
+        'A change dated forward is logged from when it was entered, not when it starts to bite. The two are rarely the same day, and the entry date is the one that answers who decided.',
+      ],
+    },
+    ADMIN: {
+      focus: 'Everything, plus the audit trail — which is the point of the tab.',
+      steps: [
+        {
+          title: 'The audit trail is the record',
+          body: 'Timecards are financial documents. Every schedule edit, timecard edit and approval is attributable, and this is where you attribute it.',
+        },
+        {
+          title: 'Rules Log is the same data, filtered to what matters',
+          body: 'The audit trail answers "who touched this record". Rules Log answers "what was different back then" — a much shorter list, and the one people actually ask for.',
+        },
+      ],
+    },
+  },
+
+  '/reports': {
+    ADVISOR: {
+      focus: 'Your own day: what was planned against what happened.',
+      watchFor: [
+        '“Worth asking about” is a prompt for a conversation, not an accusation. If it says something you can explain, explain it.',
+      ],
+    },
+    TEAM_LEADER: {
+      focus: 'One advisor, one day, before you have the conversation about it.',
+      steps: [
+        {
+          title: 'Read the bar before the numbers',
+          body: 'Green is time spent doing what was planned. The shape tells you whether the day drifted or broke, which is a different conversation.',
+        },
+      ],
+    },
+    TRAINER: { focus: 'Whether a trainee’s week is improving, which is a trend rather than a day.' },
+    OPS_MANAGER: {
+      focus: 'Analytics: the pattern across a fortnight rather than the incident on a Tuesday.',
+      steps: [
+        {
+          title: 'Scorecards are sorted by exception count',
+          body: 'The top of that list is where a conversation is due. One exception is an incident; a column of them is a pattern.',
+        },
+        {
+          title: 'Shrinkage tells you where the hours went',
+          body: 'Paid time off the phone, by activity. It is the number that explains why the roster looked sufficient and the service level was not.',
+        },
+      ],
+    },
+    ADMIN: { focus: 'The query tool, for the questions no fixed report answers.' },
+  },
+};
+
+/** The note for a role on a screen, if there is one worth showing. */
+export function roleNoteFor(pathname: string, role: string): RoleTabNote | undefined {
+  const guide = guideForPath(pathname);
+  if (!guide) return undefined;
+  return ROLE_TAB_NOTES[guide.path]?.[role as Role];
 }

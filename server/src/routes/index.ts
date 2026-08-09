@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { db } from '../db/index.js';
+import { audit, db } from '../db/index.js';
 import { authenticate, requireRole, requireSupervisor, signToken } from '../middleware/auth.js';
 import { asyncRoute, HttpError } from '../middleware/errors.js';
 import {
@@ -29,8 +29,19 @@ import {
   visibleUserIds,
 } from '../services/people.js';
 import { getClockState, punch } from '../services/clock.js';
+import { weekCover } from '../services/planning.js';
+import { historyFor, rulesLog } from '../services/history.js';
 import { emit, notify } from '../services/events.js';
-import { applyGroupException, getShifts, getShiftsInRange, saveShifts } from '../services/scheduling.js';
+import {
+  applyGroupException,
+  getShifts,
+  getShiftsInRange,
+  moveShift,
+  publishSchedules,
+  removeGroupException,
+  saveShifts,
+  teamWeek,
+} from '../services/scheduling.js';
 import {
   generateTimecard,
   payrollSummary,
@@ -180,7 +191,126 @@ api.post(
   }),
 );
 
+// ----------------------------------------------------------------- history
+api.get(
+  '/history/:userId',
+  authenticate,
+  asyncRoute(async (req, res) => {
+    const userId = Number(req.params.userId);
+    // An advisor may read their own, and a supervisor may read anyone they
+    // manage. Nobody reads a peer's — this is a record of things done to a
+    // person, not a public log.
+    const own = req.user!.id === userId;
+    if (!own && !(await canManage(req.user!, userId))) {
+      throw new HttpError(403, 'You cannot view that history.');
+    }
+    const end = dateSchema.parse(req.query.end ?? addDays(todayStr(), 14));
+    const start = dateSchema.parse(req.query.start ?? addDays(end, -45));
+    res.json({ entries: await historyFor({ userId, start, end }) });
+  }),
+);
+
 // --------------------------------------------------------------- schedules
+// Registered before `/schedules/:userId`, or Express reads "team" as a user id.
+api.get(
+  '/schedules/team',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? addDays(start, 6));
+    if (end < start) throw new HttpError(400, 'The end of the range is before the start.');
+    if (diffMinutes(`${start} 00:00`, `${end} 00:00`) > 31 * 24 * 60) {
+      throw new HttpError(400, 'Ask for a month at a time or less.');
+    }
+    const userIds = await resolveGroup(req.user!, req.query.group as string | undefined);
+    const week = await teamWeek({ userIds, start, end });
+
+    // Cover is best-effort here. A team leader without a project on their
+    // account still needs the grid; they simply do not get the requirement
+    // line under each date, and a missing forecast is not a reason to fail the
+    // whole screen.
+    const projectId =
+      (typeof req.query.project === 'string' ? req.query.project : null) ?? req.user!.project_id;
+    const cover = projectId
+      ? await weekCover({ projectId, userIds, dates: week.dates })
+      : [];
+
+    res.json({ ...week, cover });
+  }),
+);
+
+api.post(
+  '/schedules/publish',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({ group: z.string().optional(), start: dateSchema, end: dateSchema })
+      .parse(req.body);
+    if (body.end < body.start) throw new HttpError(400, 'The end of the range is before the start.');
+
+    const userIds = await resolveGroup(req.user!, body.group);
+    const result = await publishSchedules({
+      userIds,
+      start: body.start,
+      end: body.end,
+      actorId: req.user!.id,
+    });
+
+    // One message per person naming their own days, not a broadcast. "The
+    // schedule is published" tells an advisor nothing they can act on; "you
+    // are working Tue, Thu, Sat" does.
+    for (const person of result.affected) {
+      emit('schedule.changed', person.userId, `${req.user!.name} published your schedule`, {
+        date: person.dates[0],
+      });
+      await notify(
+        [person.userId],
+        'Your schedule is published',
+        `${req.user!.name} published ${person.dates.length} day${person.dates.length === 1 ? '' : 's'}: ` +
+          `${person.dates.join(', ')}. It is on My Week now.`,
+      );
+    }
+    res.json(result);
+  }),
+);
+
+api.post(
+  '/schedules/move',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        userId: z.number().int().positive(),
+        fromDate: dateSchema,
+        toDate: dateSchema,
+        shiftNo: z.number().int().positive(),
+      })
+      .parse(req.body);
+    if (!(await canManage(req.user!, body.userId))) throw new HttpError(403, 'You cannot edit that schedule.');
+
+    const result = await moveShift({ ...body, today: todayStr(), actorId: req.user!.id });
+    if (result.ok) {
+      // Both days change shape, so both cards have to be re-derived.
+      for (const date of [body.fromDate, body.toDate]) {
+        await generateTimecard({ userId: body.userId, date, actorId: req.user!.id });
+      }
+      const who = (await getUser(body.userId))?.name ?? `#${body.userId}`;
+      emit('schedule.changed', body.userId, `${req.user!.name} moved ${who}'s shift to ${body.toDate}`, {
+        date: body.toDate,
+      });
+      await notify(
+        [body.userId],
+        'Your shift moved',
+        `${req.user!.name} moved your ${body.fromDate} shift to ${body.toDate}. Check My Week.`,
+      );
+    }
+    res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
 api.get(
   '/schedules/:userId',
   authenticate,
@@ -189,7 +319,12 @@ api.get(
     if (!(await canManage(req.user!, userId))) throw new HttpError(403, 'You cannot view that schedule.');
     const start = dateSchema.parse(req.query.start ?? todayStr());
     const end = dateSchema.parse(req.query.end ?? start);
-    res.json({ days: await getShiftsInRange(userId, start, end) });
+    // One endpoint, two audiences: the editor a supervisor builds a week in,
+    // and the week an advisor reads. A supervisor sees their own drafts; the
+    // advisor whose week it is sees only what they have actually been told,
+    // even when they are the one asking.
+    const includeDrafts = req.user!.role !== 'ADVISOR' && req.user!.id !== userId;
+    res.json({ days: await getShiftsInRange(userId, start, end, { includeDrafts }) });
   }),
 );
 
@@ -275,6 +410,43 @@ api.post(
   }),
 );
 
+api.post(
+  '/schedules/group-exception/remove',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        group: z.string().optional(),
+        userIds: z.array(z.number()).optional(),
+        date: dateSchema,
+        activityKey: z.string(),
+        startTime: timeSchema,
+        endTime: timeSchema,
+      })
+      .parse(req.body);
+
+    const ids = body.userIds ?? (await resolveGroup(req.user!, body.group));
+    const allowed = new Set(await visibleUserIds(req.user!));
+    const targets = ids.filter((id) => allowed.has(id));
+    if (targets.length === 0) throw new HttpError(400, 'No employees in range for that group.');
+
+    const result = await removeGroupException({
+      userIds: targets,
+      date: body.date,
+      activityKey: body.activityKey as any,
+      startTime: body.startTime,
+      endTime: body.endTime,
+      actorId: req.user!.id,
+    });
+    for (const userId of result.removed) {
+      await generateTimecard({ userId, date: body.date, actorId: req.user!.id });
+      emit('schedule.changed', userId, `An exception was removed from ${body.date}`, { date: body.date });
+    }
+    res.json(result);
+  }),
+);
+
 // --------------------------------------------------------------- timecards
 api.get(
   '/timecards/:userId/:date',
@@ -311,8 +483,11 @@ api.put(
     const userId = Number(req.params.userId);
     const date = dateSchema.parse(req.params.date);
     if (!(await canManage(req.user!, userId))) throw new HttpError(403, 'You cannot edit that timecard.');
-    const body = z.object({ rows: z.array(rowSchema) }).parse(req.body);
+    const body = z
+      .object({ rows: z.array(rowSchema), correctionReason: z.string().max(500).optional() })
+      .parse(req.body);
     const result = await saveTimecard({
+      correctionReason: body.correctionReason,
       userId,
       date,
       rows: body.rows,
@@ -798,7 +973,26 @@ api.post(
       'INSERT INTO shift_rule_changes (user_id, shift_rule, effective_date, created_by) VALUES (?, ?, ?, ?)',
       [body.userId, body.shiftRule, body.effectiveDate, req.user!.id],
     );
+    // Audited as well as stored. The row in shift_rule_changes says what will
+    // happen; the audit entry says who decided it and when they decided it,
+    // which is the half that gets asked about after a disputed payroll run.
+    const subject = (await getUser(body.userId))?.name ?? `#${body.userId}`;
+    await audit(req.user!.id, 'shift_rule', body.userId, 'CHANGE', {
+      shiftRule: body.shiftRule,
+      effectiveDate: body.effectiveDate,
+      subject,
+    });
     res.json({ ok: true, message: `Shift rule ${body.shiftRule} takes effect on ${body.effectiveDate}.` });
+  }),
+);
+
+api.get(
+  '/admin/rules-log',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const limit = Number(req.query.limit ?? 100);
+    res.json({ entries: await rulesLog({ limit: Number.isFinite(limit) ? limit : 100 }) });
   }),
 );
 

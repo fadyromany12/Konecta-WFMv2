@@ -9,8 +9,15 @@ import { db } from '../db/index.js';
 import { authenticate, requireSupervisor } from '../middleware/auth.js';
 import { asyncRoute, HttpError } from '../middleware/errors.js';
 import { intervalsOfDay, requiredStaffing } from '../domain/forecast.js';
+import { planMultiSkill } from '../domain/multiSkill.js';
 import { addDays, todayStr } from '../domain/time.js';
 import { canManage, placeholders, resolveGroup, visibleUserIds } from '../services/people.js';
+import {
+  acknowledgeAlert,
+  assessLeave,
+  payrollExport,
+  releaseAlert,
+} from '../services/planning.js';
 import { intradaySnapshot } from '../services/intraday.js';
 import {
   autoSchedule,
@@ -141,6 +148,67 @@ planning.get('/forecast/staffing', authenticate, requireSupervisor, (req, res) =
     .parse(req.query);
   res.json(requiredStaffing(query));
 });
+
+/**
+ * Size a roster where advisors are not interchangeable.
+ *
+ * Kept as its own endpoint rather than folded into `/forecast`. It runs a
+ * simulation per candidate headcount, which is milliseconds rather than
+ * microseconds, and putting that behind every coverage read would make the
+ * whole planning screen slower to answer a question most days do not ask.
+ */
+planning.post(
+  '/forecast/multi-skill',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z
+      .object({
+        skills: z
+          .array(
+            z.object({
+              key: z.string().min(1).max(40),
+              volume: z.number().min(0).max(100000),
+              ahtSeconds: z.number().min(1).max(7200),
+            }),
+          )
+          .min(1, 'Describe at least one skill.')
+          .max(12, 'Twelve skills is already more than a simulation of a half hour can say much about.'),
+        pools: z
+          .array(
+            z.object({
+              key: z.string().min(1).max(40),
+              skills: z.array(z.string()).min(1, 'A pool that serves no skill is not a pool.'),
+            }),
+          )
+          .min(1)
+          .max(12),
+        serviceGoal: z.number().min(0.5).max(0.99).default(0.8),
+        targetSeconds: z.number().min(1).max(600).default(20),
+        shrinkage: z.number().min(0).max(0.9).default(0.3),
+      })
+      .parse(req.body);
+
+    const known = new Set(body.skills.map((s) => s.key));
+    for (const pool of body.pools) {
+      const unknown = pool.skills.filter((k) => !known.has(k));
+      if (unknown.length > 0) {
+        throw new HttpError(400, `${pool.key} is trained on ${unknown.join(', ')}, which is not a skill you listed.`);
+      }
+    }
+    const uncovered = body.skills
+      .filter((s) => s.volume > 0 && !body.pools.some((p) => p.skills.includes(s.key)))
+      .map((s) => s.key);
+    if (uncovered.length > 0) {
+      throw new HttpError(
+        400,
+        `Nobody is trained on ${uncovered.join(', ')}. Add a pool that serves ${uncovered.length === 1 ? 'it' : 'them'}, or set the volume to zero.`,
+      );
+    }
+
+    res.json(planMultiSkill(body));
+  }),
+);
 
 planning.post(
   '/forecast/auto-schedule',
@@ -316,5 +384,94 @@ planning.post(
 
     const result = await awardBid(Number(req.params.bidId), req.user!.id);
     res.status(result.ok ? 200 : 400).json(result);
+  }),
+);
+
+// ------------------------------------------------------- coverage-aware leave
+/**
+ * What approving a time-off request would do to cover.
+ *
+ * Read-only and advisory: the screen shows it beside the Approve button, and
+ * the supervisor still decides.
+ */
+planning.get(
+  '/absence/requests/:id/impact',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const request = await db.get<any>('SELECT * FROM time_off_requests WHERE id = ?', [
+      Number(req.params.id),
+    ]);
+    if (!request) throw new HttpError(404, 'No such request.');
+    if (!(await canManage(req.user!, request.user_id))) {
+      throw new HttpError(403, 'That request is not yours to look at.');
+    }
+
+    const advisor = await db.get<{ project_id: string | null }>(
+      'SELECT project_id FROM users WHERE id = ?',
+      [request.user_id],
+    );
+    res.json(
+      await assessLeave({
+        userId: request.user_id,
+        start: request.start_date,
+        end: request.end_date,
+        userIds: await visibleUserIds(req.user!),
+        projectId: advisor?.project_id ?? req.user!.project_id,
+      }),
+    );
+  }),
+);
+
+// ------------------------------------------------------------ alert handling
+planning.post(
+  '/alerts/:key/ack',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const body = z.object({ userId: z.number().int(), note: z.string().max(300).optional() }).parse(req.body);
+    if (!(await canManage(req.user!, body.userId))) {
+      throw new HttpError(403, 'That advisor is not on your team.');
+    }
+    const result = await acknowledgeAlert({
+      alertKey: req.params.key,
+      userId: body.userId,
+      payrollDate: todayStr(),
+      ackedBy: req.user!.id,
+      note: body.note,
+    });
+    res.json(result);
+  }),
+);
+
+planning.delete(
+  '/alerts/:key/ack',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const released = await releaseAlert(req.params.key, todayStr());
+    res.json({ ok: released, message: released ? 'Handed back.' : 'Nobody had picked that up.' });
+  }),
+);
+
+// ------------------------------------------------------------ payroll export
+/**
+ * One row per advisor, per day, per code. The last mile between this tool and
+ * whatever actually pays people.
+ */
+planning.get(
+  '/payroll/export',
+  authenticate,
+  requireSupervisor,
+  asyncRoute(async (req, res) => {
+    const start = dateSchema.parse(req.query.start ?? todayStr());
+    const end = dateSchema.parse(req.query.end ?? start);
+    const rows = await payrollExport({
+      userIds: await groupOf(req),
+      start,
+      end,
+      approvedOnly: req.query.approvedOnly !== 'false',
+    });
+    res.json({ rows, start, end, approvedOnly: req.query.approvedOnly !== 'false' });
   }),
 );

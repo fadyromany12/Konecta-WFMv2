@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS schedules (
   end_at       TEXT NOT NULL,
   source       TEXT NOT NULL DEFAULT 'PULSE',
   updated_at   TEXT NOT NULL DEFAULT {{NOW}},
+  -- DRAFT or PUBLISHED. A week being built is nobody's business until whoever
+  -- is building it says so; an advisor who watches their week change three
+  -- times before Friday stops believing any of it. Defaulted to PUBLISHED so
+  -- that rows written before this column existed stay visible.
+  status       TEXT NOT NULL DEFAULT 'PUBLISHED',
+  published_at TEXT,
   UNIQUE (user_id, payroll_date, shift_no)
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_user_date ON schedules(user_id, payroll_date);
@@ -120,6 +126,9 @@ CREATE TABLE IF NOT EXISTS timecards (
   -- so an automatic rebuild can never silently discard a supervisor's edit.
   edited              INTEGER NOT NULL DEFAULT 0,
   notes               TEXT,
+  -- Why a correction was made after payroll had already run. These are
+  -- financial adjustments and "somebody edited it" is not an answer at audit.
+  correction_reason   TEXT,
   updated_at          TEXT NOT NULL DEFAULT {{NOW}},
   UNIQUE (user_id, payroll_date, shift_no)
 );
@@ -209,6 +218,25 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL DEFAULT {{NOW}}
 );
 CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, read_flag);
+
+-- Intraday alerts a supervisor has taken responsibility for.
+--
+-- The alert list itself is derived on every read rather than stored — it is a
+-- statement about right now, and a stored copy would go stale. What does need
+-- storing is who picked one up, so two supervisors do not both chase the same
+-- advisor and neither realises the other did.
+CREATE TABLE IF NOT EXISTS alert_acks (
+  id           {{ID}},
+  -- Stable identity for the alert: who it is about, what kind, and which day.
+  alert_key    TEXT NOT NULL,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  payroll_date TEXT NOT NULL,
+  acked_by     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  note         TEXT,
+  created_at   TEXT NOT NULL DEFAULT {{NOW}},
+  UNIQUE (alert_key, payroll_date)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_acks_date ON alert_acks(payroll_date);
 
 -- Forecast volumes per half hour. Required headcount is derived from these by
 -- the Erlang model rather than stored, so changing the service goal or

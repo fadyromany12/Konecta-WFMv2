@@ -18,15 +18,27 @@ export type { Database, Row } from './driver.js';
  * fails. It should fail loudly instead, which is what happens — the first query
  * throws rather than succeeding against the wrong store.
  */
+/**
+ * A variable that exists but is blank counts as unset.
+ *
+ * Hosting dashboards create empty variables readily — you add the key, save,
+ * and fill the value in later. Treating `POSTGRES_URL=""` as "use Postgres"
+ * sends the process at libpq's defaults on localhost:5432 and it dies with a
+ * connection refused that names a database nobody configured.
+ */
+const configured = (value: string | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
 const postgresUrl =
-  process.env.PULSE_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  process.env.POSTGRES_URL ??
-  process.env.POSTGRES_URL_NON_POOLING ??
-  null;
+  configured(process.env.PULSE_DATABASE_URL) ??
+  configured(process.env.DATABASE_URL) ??
+  configured(process.env.POSTGRES_URL) ??
+  configured(process.env.POSTGRES_URL_NON_POOLING);
 
 const sqliteFile =
-  process.env.PULSE_DB ??
+  configured(process.env.PULSE_DB) ??
   // A serverless filesystem is read-only apart from /tmp, and /tmp does not
   // survive or get shared between instances. Defaulting to memory there means
   // the deployment needs no configuration — at the cost of losing everything on
@@ -56,8 +68,42 @@ let ready: Promise<void> | null = null;
  * racing to run it twice.
  */
 export function ensureSchema(): Promise<void> {
-  ready ??= db.exec(schemaFor(db.dialect));
+  ready ??= db.exec(schemaFor(db.dialect)).then(migrate);
   return ready;
+}
+
+/**
+ * Additive migrations for databases that already exist.
+ *
+ * `CREATE TABLE IF NOT EXISTS` creates a missing table and does nothing at all
+ * to one that is already there — so a column added to the schema never reaches
+ * a database that predates it. New tables are handled by the schema itself;
+ * new *columns* need this.
+ *
+ * Deliberately only additive. A destructive migration run automatically on
+ * startup against a database holding payroll records is not something this
+ * should be able to do by accident.
+ */
+async function migrate(): Promise<void> {
+  await addColumn('timecards', 'correction_reason', 'TEXT');
+  // Existing rows were being worked to, so they are published by definition.
+  await addColumn('schedules', 'status', "TEXT NOT NULL DEFAULT 'PUBLISHED'");
+  await addColumn('schedules', 'published_at', 'TEXT');
+}
+
+async function addColumn(table: string, column: string, type: string): Promise<void> {
+  try {
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    console.log(`Migrated: added ${table}.${column}`);
+  } catch (err) {
+    // Both engines refuse a duplicate column, with different wording. That is
+    // the expected outcome on every start after the first, so it is not an
+    // error — anything else is, and should surface.
+    const message = err instanceof Error ? err.message.toLowerCase() : String(err);
+    const alreadyThere =
+      message.includes('duplicate column') || message.includes('already exists');
+    if (!alreadyThere) throw err;
+  }
 }
 
 export async function audit(

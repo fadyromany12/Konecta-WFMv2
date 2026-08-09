@@ -15,6 +15,7 @@ export function Admin() {
           { to: '/admin', label: 'Details of Who' },
           { to: '/admin/supervisor', label: 'Supervisor Admin' },
           { to: '/admin/alternate', label: 'Alternate Team Leader' },
+          { to: '/admin/rules', label: 'Rules Log' },
           { to: '/admin/audit', label: 'Audit Trail' },
         ]}
       />
@@ -22,6 +23,7 @@ export function Admin() {
         <Route index element={<DetailsOfWho />} />
         <Route path="supervisor" element={<SupervisorAdmin />} />
         <Route path="alternate" element={<AlternateUser />} />
+        <Route path="rules" element={<RulesLog />} />
         <Route path="audit" element={<AuditTrail />} />
       </Routes>
     </>
@@ -368,6 +370,83 @@ function AlternateUser() {
 }
 
 /** Every schedule edit, timecard edit and approval, with who did it. */
+interface RuleChange {
+  at: string;
+  actor: string | null;
+  kind: 'shift-rule' | 'forecast-settings' | 'payroll-run' | 'schedule-publish';
+  what: string;
+  subject: string | null;
+  effectiveDate: string | null;
+  pending: boolean;
+}
+
+const RULE_LABEL: Record<RuleChange['kind'], string> = {
+  'shift-rule': 'Shift rule',
+  'forecast-settings': 'Staffing model',
+  'payroll-run': 'Payroll',
+  'schedule-publish': 'Publication',
+};
+
+/**
+ * What changed in the rules, and when.
+ *
+ * The audit trail below answers "who touched this record". This answers a
+ * different question — "what was different back then" — and it is the one
+ * asked first after a payroll run somebody disagrees with. Until now it needed
+ * three screens and one of them, the forecast settings, did not keep its old
+ * values at all.
+ */
+function RulesLog() {
+  const [kind, setKind] = useState('');
+  const log = useAsync(() => api.get<{ entries: RuleChange[] }>('/admin/rules-log'), []);
+  const entries = (log.data?.entries ?? []).filter((e) => !kind || e.kind === kind);
+
+  return (
+    <Card
+      title="Rules log"
+      subtitle="Changes to the rules everything else is judged against — not edits to individual records."
+    >
+      <Toolbar>
+        <label className="field">
+          <span>Kind</span>
+          <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="">Everything</option>
+            <option value="shift-rule">Shift rules</option>
+            <option value="forecast-settings">Staffing model</option>
+            <option value="payroll-run">Payroll runs</option>
+            <option value="schedule-publish">Publications</option>
+          </select>
+        </label>
+        <div style={{ flex: 1 }} />
+        <span className="muted">{entries.length} entries</span>
+      </Toolbar>
+
+      {log.loading && !log.data && <SkeletonTable rows={6} columns={4} />}
+      {!log.loading && entries.length === 0 && <Empty>Nothing has changed the rules yet.</Empty>}
+
+      <ul className="history">
+        {entries.map((entry, i) => (
+          <li key={i} className={`history-${entry.kind}`} style={{ ['--i' as string]: i }}>
+            <span className="muted mono history-when">{entry.at.slice(0, 16)}</span>
+            <span>
+              <Chip label={RULE_LABEL[entry.kind]} tone={entry.pending ? 'warn' : 'neutral'} />{' '}
+              {entry.subject && <strong>{entry.subject}: </strong>}
+              {entry.what}
+              {entry.pending && <span className="muted"> Not in force yet.</span>}
+            </span>
+            <span className="muted history-who">{entry.actor ?? 'the system'}</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="muted">
+        A change dated forward is listed from the moment it was entered, not the day it starts to bite — the
+        question this answers is when somebody decided, which is rarely the same day.
+      </p>
+    </Card>
+  );
+}
+
 function AuditTrail() {
   const [entity, setEntity] = useState('');
   const audit = useAsync(
