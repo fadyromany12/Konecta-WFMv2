@@ -50,12 +50,53 @@ function groupOf(req: any): Promise<number[]> {
   return resolveGroup(req.user!, group);
 }
 
-/** The project a supervisor plans for, defaulting to their own. */
-function projectOf(req: any): string {
-  const explicit = typeof req.query.project === 'string' ? req.query.project : null;
-  const projectId = explicit ?? req.user!.project_id;
-  if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
-  return projectId;
+/**
+ * The project a supervisor plans for.
+ *
+ * Used to be the viewer's own project or a 400, which reads as reasonable and
+ * meant that **the Administrator could not open a single planning screen**.
+ * An Administrator belongs to no project by design — they are not on a
+ * campaign — so every forecast, coverage and auto-schedule call they made came
+ * back "No project is associated with your account", and the screens were dead
+ * for the one account meant to see everything. Any real deployment will have
+ * more such people: a WFM analyst covering several campaigns, a regional
+ * manager, anyone hired above a single project.
+ *
+ * So it falls back rather than refusing. In order:
+ *
+ * 1. Whatever was asked for explicitly, which is how the picker will work.
+ * 2. The viewer's own project, which is right for almost everybody.
+ * 3. The project the people currently in view belong to — for somebody with no
+ *    project of their own, the team on screen is the best available statement
+ *    of what they are looking at.
+ * 4. The first project on file, so a fresh deployment still shows something.
+ *
+ * Only a database with no projects at all now refuses, and that message says
+ * so rather than blaming the account.
+ */
+async function projectOf(req: any, explicitBody?: string): Promise<string> {
+  const explicit =
+    explicitBody ?? (typeof req.query.project === 'string' ? req.query.project : null);
+  if (explicit) return explicit;
+  if (req.user!.project_id) return req.user!.project_id;
+
+  const visible = await groupOf(req);
+  if (visible.length > 0) {
+    const shared = await db.get<{ project_id: string }>(
+      `SELECT project_id FROM users
+       WHERE project_id IS NOT NULL AND id IN (${placeholders(visible.length)})
+       GROUP BY project_id ORDER BY COUNT(*) DESC, project_id LIMIT 1`,
+      visible,
+    );
+    if (shared?.project_id) return shared.project_id;
+  }
+
+  const first = await db.get<{ activity_id: string }>(
+    'SELECT activity_id FROM projects ORDER BY activity_id LIMIT 1',
+  );
+  if (first?.activity_id) return first.activity_id;
+
+  throw new HttpError(400, 'There are no projects on file to plan against.');
 }
 
 // ---------------------------------------------------------------- intraday
@@ -75,7 +116,7 @@ planning.get(
   requireSupervisor,
   asyncRoute(async (req, res) => {
     const date = dateSchema.parse(req.query.date ?? todayStr());
-    const projectId = projectOf(req);
+    const projectId = await projectOf(req);
     const userIds = await groupOf(req);
     const [result, forecast] = await Promise.all([
       coverageFor({ projectId, date, userIds }),
@@ -104,8 +145,7 @@ planning.put(
       })
       .parse(req.body);
 
-    const projectId = body.project ?? req.user!.project_id;
-    if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
+    const projectId = await projectOf(req, body.project);
 
     await saveForecast(projectId, body.date, body.rows, req.user!.id);
     res.json({
@@ -128,8 +168,7 @@ planning.put(
         shrinkage: z.number().min(0).max(0.9),
       })
       .parse(req.body);
-    const projectId = body.project ?? req.user!.project_id;
-    if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
+    const projectId = await projectOf(req, body.project);
     await saveSettings(projectId, body, req.user!.id);
     res.json({ ok: true, settings: await getSettings(projectId) });
   }),
@@ -218,8 +257,7 @@ planning.post(
     const body = z
       .object({ date: dateSchema, project: z.string().optional(), maxShifts: z.number().int().min(1).max(200).optional() })
       .parse(req.body);
-    const projectId = body.project ?? req.user!.project_id;
-    if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
+    const projectId = await projectOf(req, body.project);
 
     const result = await autoSchedule({
       projectId,
@@ -354,8 +392,7 @@ planning.post(
         project: z.string().optional(),
       })
       .parse(req.body);
-    const projectId = body.project ?? req.user!.project_id;
-    if (!projectId) throw new HttpError(400, 'No project is associated with your account.');
+    const projectId = await projectOf(req, body.project);
     res.json(await createOffer({ ...body, projectId, actorId: req.user!.id }));
   }),
 );

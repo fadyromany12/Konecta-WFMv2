@@ -674,6 +674,23 @@ check('settling the same way twice banks one day, not two', (await bank()) === b
 await call('POST',`/pay/timecards/${holidayCard.id}/holiday-election`,OM,{election:'PAY_3X'});
 check('changing to cash takes the banked day back', (await bank()) === bankBefore, `expected ${bankBefore}`);
 
+console.log('=== PLANNING WITHOUT A PROJECT ===');
+// The Administrator belongs to no project by design, and every planning screen
+// used to answer them "No project is associated with your account" — dead
+// screens for the one account meant to see everything.
+const adminForecast = await call('GET','/forecast',ADM);
+check('an administrator can read the forecast', adminForecast.status === 200,
+  JSON.stringify(adminForecast.body).slice(0, 90));
+check('and gets a real project back', typeof adminForecast.body?.projectId === 'string');
+check('an administrator can read coverage-driven screens',
+  (await call('GET','/intraday',ADM)).status === 200);
+check('asking for a project explicitly still wins',
+  (await call('GET','/forecast?project=B900',ADM)).body?.projectId === 'B900');
+check('somebody with a project of their own still gets theirs',
+  (await call('GET','/forecast',TL)).body?.projectId === 'A123');
+check('an advisor is still refused the forecast',
+  (await call('GET','/forecast',ADV)).status === 403);
+
 console.log('=== SPA ROUTING ===');
 for (const p of ['/dashboard','/admin/audit','/reports/query','/my']) {
   const res = await fetch(ORIGIN + p, { headers: { accept: 'text/html' } });
