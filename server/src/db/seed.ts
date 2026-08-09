@@ -70,7 +70,35 @@ const UNBROKEN_SHIFT: SeedRow[] = [
  * serverless cold start can seed its own ephemeral database, which is how the
  * hosted testing deployment gets its data.
  */
+/**
+ * Seed the database, all of it or none of it.
+ *
+ * The work below is split into sections that each opened their own
+ * transaction, which is fine until one of them does not finish. Against a
+ * hosted Postgres the first cold start pays for every insert as a network
+ * round trip, and a serverless function has thirty seconds — production hit
+ * exactly that on its first request after being pointed at Supabase, timing
+ * out partway through.
+ *
+ * Per-section transactions make that outcome the worst possible one: the
+ * users commit, the forecast never runs, and `ensureSeeded` — which asks only
+ * whether any users exist — sees a seeded database and never repairs it. The
+ * deployment then looks fine and is quietly missing half its data.
+ *
+ * One transaction around the whole thing turns a timeout into a rollback, so
+ * the next request finds an empty database and starts again. Both drivers
+ * join a transaction already in progress rather than opening a second, so the
+ * sections below need no changes.
+ *
+ * This makes failure clean; it does not make the seed fast. Sending each row
+ * individually is what costs the thirty seconds, and batching the inserts is
+ * the fix for that.
+ */
 export async function seed(options: { force?: boolean; quiet?: boolean } = {}): Promise<{ seeded: boolean }> {
+  return transact(() => runSeed(options));
+}
+
+async function runSeed(options: { force?: boolean; quiet?: boolean } = {}): Promise<{ seeded: boolean }> {
   const { force = false, quiet = false } = options;
   const say = (...args: unknown[]) => {
     if (!quiet) console.log(...args);
