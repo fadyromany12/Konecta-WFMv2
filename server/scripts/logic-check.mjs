@@ -386,6 +386,52 @@ const closed = offers.find((o) => o.status !== 'OPEN');
 if (closed) check('cannot bid on a closed offer', (await call('POST',`/extra-hours/${closed.id}/bid`,ADV)).body?.ok === false);
 else check('no closed offer to test (skipped)', true);
 
+console.log('=== LEAVE BALANCE ===');
+const advId2 = (await call('GET','/auth/me',ADV)).body.user.id;
+const before = (await call('GET','/people/'+advId2,TL)).body.accruals.find((a)=>a.accrual_type==='VACATION');
+const bal = before?.balance_hours ?? 0;
+check('advisor has a vacation balance', bal > 0, `${bal} hours`);
+
+// Whatever is genuinely left, so this holds however many requests earlier
+// checks or a human left on file — the pass must not depend on a fresh seed.
+const mine = (await call('GET','/absence/requests',ADV)).body?.requests ?? [];
+const pendingVac = mine
+  .filter((r) => r.status === 'PENDING' && r.accrual_type === 'VACATION')
+  .reduce((sum, r) => sum + r.hours, 0);
+const room = bal - pendingVac;
+
+// Far enough out that nothing seeded or previously requested sits there.
+const far = (n) => day(400 + n * 5);
+
+if (room > 0) {
+  // The defect: each request was checked against the balance and none against
+  // the others, so the same room could be claimed over and over.
+  const first = await call('POST','/absence/requests',ADV,
+    {accrualType:'VACATION',startDate:far(0),endDate:far(0),hours:room});
+  const secondTry = await call('POST','/absence/requests',ADV,
+    {accrualType:'VACATION',startDate:far(1),endDate:far(1),hours:room});
+  check('the balance can be claimed once', first.status === 200, `status ${first.status}`);
+  check('the same balance cannot be claimed twice',
+    secondTry.status === 400, `status ${secondTry.status} with ${room}h room`);
+  check('the refusal explains what is already spoken for',
+    /waiting|accrued/.test(secondTry.body?.error ?? secondTry.body?.message ?? ''),
+    JSON.stringify(secondTry.body).slice(0,140));
+} else check('no vacation room left to test the balance rule (skipped)', true);
+
+check('an overlapping request is refused',
+  (await call('POST','/absence/requests',ADV,
+    {accrualType:'SICK',startDate:far(0),endDate:far(0),hours:8})).status === 400);
+check('a backwards range is refused',
+  (await call('POST','/absence/requests',ADV,
+    {accrualType:'VACATION',startDate:day(420),endDate:day(410),hours:8})).status === 400);
+const unpaidFar = day(500);
+check('unpaid leave ignores the balance',
+  (await call('POST','/absence/requests',ADV,
+    {accrualType:'UNPAID',startDate:unpaidFar,endDate:unpaidFar,hours:9999})).status === 200);
+check('unpaid leave still cannot overlap',
+  (await call('POST','/absence/requests',ADV,
+    {accrualType:'UNPAID',startDate:unpaidFar,endDate:unpaidFar,hours:8})).status === 400);
+
 console.log('=== PERSONAL HISTORY ===');
 const hist = await call('GET',`/history/${target.id}`,TL);
 check('history returns entries', Array.isArray(hist.body?.entries), JSON.stringify(hist.body).slice(0,100));

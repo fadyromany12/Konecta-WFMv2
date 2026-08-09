@@ -16,6 +16,7 @@ import {
 } from '../domain/reference.js';
 import { buildAdherenceReport, punctuality } from '../domain/adherence.js';
 import { evaluateEdit } from '../domain/editWindow.js';
+import { assessApproval, assessRequest } from '../domain/leaveBalance.js';
 import { addDays, diffMinutes, nowStamp, todayStr } from '../domain/time.js';
 import {
   canManage,
@@ -646,22 +647,36 @@ api.post(
       })
       .parse(req.body);
 
-    if (body.endDate < body.startDate) throw new HttpError(400, 'The end date is before the start date.');
-
-    // Accrual enforcement: a request cannot exceed what has actually accrued.
-    if (body.accrualType !== 'UNPAID') {
-      const balance = await db.get<{ balance_hours: number }>(
+    // Judged against the balance *and* everything already on file. Checking
+    // only the balance is correct exactly once: ask twice and both pass,
+    // because neither request knows about the other.
+    const [balance, claims] = await Promise.all([
+      db.get<{ balance_hours: number }>(
         'SELECT balance_hours FROM accruals WHERE user_id = ? AND accrual_type = ?',
         [req.user!.id, body.accrualType],
-      );
-      const available = balance?.balance_hours ?? 0;
-      if (body.hours > available) {
-        throw new HttpError(
-          400,
-          `You have ${available} hours of ${body.accrualType.toLowerCase()} accrued and asked for ${body.hours}.`,
-        );
-      }
-    }
+      ),
+      db.all<{ start_date: string; end_date: string; accrual_type: string; hours: number; status: string }>(
+        `SELECT start_date, end_date, accrual_type, hours, status FROM time_off_requests
+         WHERE user_id = ? AND status IN ('PENDING', 'APPROVED')`,
+        [req.user!.id],
+      ),
+    ]);
+
+    const verdict = assessRequest({
+      accrualType: body.accrualType,
+      startDate: body.startDate,
+      endDate: body.endDate,
+      hours: body.hours,
+      balanceHours: balance?.balance_hours ?? 0,
+      claims: claims.map((c) => ({
+        startDate: c.start_date as any,
+        endDate: c.end_date as any,
+        accrualType: c.accrual_type,
+        hours: c.hours,
+        status: c.status,
+      })),
+    });
+    if (!verdict.ok) throw new HttpError(400, verdict.reason!);
 
     const id = await db.insert(
       `INSERT INTO time_off_requests (user_id, accrual_type, start_date, end_date, hours, reason)
@@ -683,6 +698,23 @@ api.post(
     if (!request) throw new HttpError(404, 'No such request.');
     if (!(await canManage(req.user!, request.user_id))) {
       throw new HttpError(403, 'That request is not yours to decide.');
+    }
+
+    // Checked again here, not just when it was raised. The balance can have
+    // moved since — another request approved, a correction, a new accrual year
+    // — so approving on the strength of the original check trusts a number that
+    // may no longer be true.
+    if (body.status === 'APPROVED') {
+      const balance = await db.get<{ balance_hours: number }>(
+        'SELECT balance_hours FROM accruals WHERE user_id = ? AND accrual_type = ?',
+        [request.user_id, request.accrual_type],
+      );
+      const verdict = assessApproval({
+        accrualType: request.accrual_type,
+        hours: request.hours,
+        balanceHours: balance?.balance_hours ?? 0,
+      });
+      if (!verdict.ok) throw new HttpError(400, verdict.reason!);
     }
 
     await db.run('UPDATE time_off_requests SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?', [
